@@ -1,0 +1,758 @@
+<!doctype html>
+<html lang="en" data-state="asleep">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Hearth · Minecraft Server Control</title>
+<style>
+  :root{
+    --bg:#1A1410; --surface:#221A15; --surface2:#2C2118; --surfaceHover:#33271D;
+    --text:#F2E8DC; --textDim:#C9BBAC; --muted:#A1907F;
+    --border:#3A2D22; --borderWarm:#5A4128; --topHi:rgba(255,240,220,.05);
+    --ember:#E8A86B; --emberDeep:#C8794A; --emberGlow:rgba(232,168,107,.16);
+    --success:#8FAE6B; --successGlow:rgba(143,174,107,.5); --danger:#D17A6A;
+    --r-card:14px; --r-ctrl:10px; --r-pill:999px;
+    --t-fast:120ms ease; --t-mid:200ms ease;
+    --overshoot:cubic-bezier(.34,1.56,.64,1); --glide:cubic-bezier(.32,.72,0,1);
+    --ember-on:0;
+    --ui:ui-sans-serif,system-ui,'Segoe UI',Roboto,-apple-system,sans-serif;
+    --mono:ui-monospace,'Cascadia Code','Cascadia Mono',Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--ui);font-size:13px;line-height:1.55;
+    -webkit-font-smoothing:antialiased}
+  ::selection{background:rgba(232,168,107,.25)}
+  a{color:var(--ember);text-decoration:none}
+  .num{font-variant-numeric:tabular-nums}
+  .mono{font-family:var(--mono)}
+  .eyebrow{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:500}
+
+  /* paper grain on panels */
+  .paper{position:relative}
+  .paper::before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;opacity:.03;
+    background-image:radial-gradient(rgba(255,255,255,.7) .5px,transparent .5px);background-size:3px 3px;mix-blend-mode:overlay}
+
+  /* layout */
+  .app{display:flex;min-height:100vh}
+  .rail{width:232px;flex:none;background:var(--surface2);border-right:1px solid var(--border);
+    display:flex;flex-direction:column;padding:18px 12px;position:sticky;top:0;height:100vh}
+  .wm{width:100%;display:flex;align-items:center;gap:9px;padding:8px;margin-bottom:6px;border:none;background:transparent;
+    color:var(--text);font-family:inherit;cursor:pointer;border-radius:var(--r-ctrl);text-align:left;transition:background var(--t-fast)}
+  .wm:hover{background:var(--surfaceHover)}
+  .wm .flame{width:22px;height:22px;flex:none;display:grid;place-items:center;color:var(--muted);transition:var(--t-fast)}
+  [data-state="waking"] .wm .flame,[data-state="online"] .wm .flame{color:var(--ember)}
+  .wm .wmtxt{flex:1;min-width:0}
+  .wm b{font-size:15px;font-weight:600;letter-spacing:.2px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .wm small{display:block;font-size:11px;color:var(--muted);font-weight:400;margin-top:-2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .wm .chev{color:var(--muted);font-size:11px;transition:transform var(--t-fast)}
+  .wm.open .chev{transform:rotate(180deg)}
+  .switcher{display:none;margin:-2px 0 12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-ctrl);
+    box-shadow:0 12px 30px -12px rgba(0,0,0,.5);overflow:hidden}
+  .switcher.show{display:block;animation:fade var(--t-fast)}
+  .swrow{display:flex;align-items:center;gap:9px;padding:9px 11px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border)}
+  .swrow:last-child{border-bottom:none}
+  .swrow:hover,.swrow.on{background:var(--surfaceHover)}
+  .swrow .gd{width:7px;height:7px;border-radius:50%;background:var(--muted);flex:none}
+  .swrow .gd.lit{background:var(--ember);box-shadow:0 0 0 2px var(--emberGlow)}
+  .swrow .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+  .swrow .gp{font-size:11px;color:var(--muted);white-space:nowrap}
+  .swrow.new{color:var(--muted);font-weight:500}.swrow.new:hover{color:var(--text)}
+  .gd{width:10px;height:10px;border-radius:50%;background:var(--muted);flex:none}
+  .gd.lit{background:var(--ember);box-shadow:0 0 0 3px var(--emberGlow)}
+  .minicoin{width:24px;height:24px;border-radius:50%;display:inline-grid;place-items:center;font-size:10px;font-weight:600;
+    color:#241a12;box-shadow:inset 0 1px 1px rgba(255,255,255,.4),inset 0 -1px 2px rgba(0,0,0,.25)}
+  nav{display:flex;flex-direction:column;gap:2px;margin-top:4px}
+  nav button{display:flex;align-items:center;gap:11px;padding:10px 12px;border:none;background:transparent;
+    color:var(--muted);font-family:inherit;font-size:15px;font-weight:500;cursor:pointer;border-radius:var(--r-ctrl);
+    transition:background var(--t-fast),color var(--t-fast);position:relative;text-align:left}
+  nav button svg{width:16px;height:16px;flex:none}
+  nav button:hover{background:var(--surfaceHover);color:var(--textDim)}
+  nav button:hover svg{color:var(--ember)}
+  nav button.on{background:var(--surface);color:var(--text);border-top-left-radius:0;border-bottom-left-radius:0}
+  nav button.on::before{content:"";position:absolute;left:0;top:6px;bottom:6px;width:2px;border-radius:2px;background:var(--ember)}
+  .railfoot{margin-top:auto;padding:12px 10px 4px;border-top:1px solid var(--border)}
+  .ministatus{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+  .quit{display:block;margin-top:10px;font-size:11px;color:var(--muted)}
+  .quit:hover{color:var(--textDim)}
+
+  .ember-dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none;transition:background .3s,box-shadow .3s}
+  [data-state="waking"] .ember-dot{background:var(--ember)}
+  [data-state="online"] .ember-dot{background:var(--ember);box-shadow:0 0 0 3px var(--emberGlow);animation:breathe 4s ease-in-out infinite}
+  @keyframes breathe{0%,100%{box-shadow:0 0 0 2px var(--emberGlow)}50%{box-shadow:0 0 0 6px var(--emberGlow)}}
+
+  .main{flex:1;min-width:0;overflow-y:auto;height:100vh}
+  .col{max-width:880px;margin:0 auto;padding:34px 32px 80px}
+  .page{animation:turn var(--t-mid) both}
+  @keyframes turn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  h1.page-h{font-size:24px;font-weight:600;margin:0 0 4px}
+  .page-sub{color:var(--muted);font-size:13px;margin:0 0 22px}
+
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);
+    box-shadow:inset 0 1px 0 var(--topHi);padding:24px;margin-bottom:16px}
+  .card.lift{transition:transform var(--t-fast),border-color var(--t-fast),box-shadow var(--t-fast)}
+  .card.lift:hover{transform:translateY(-2px);border-color:var(--borderWarm)}
+  .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  .between{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px}
+
+  /* hearth hero */
+  .hero{position:relative;overflow:hidden;text-align:center;padding:40px 24px 30px}
+  .hero .glow{position:absolute;left:50%;top:30%;width:520px;height:340px;transform:translate(-50%,-50%);
+    border-radius:50%;pointer-events:none;
+    background:radial-gradient(circle,var(--ember) 0%,transparent 62%);
+    filter:blur(46px);opacity:calc(var(--ember-on)*.5);transition:opacity .8s ease}
+  [data-state="online"] .hero .glow{animation:hglow 4s ease-in-out infinite}
+  @keyframes hglow{0%,100%{transform:translate(-50%,-50%) scale(1)}50%{transform:translate(-50%,-50%) scale(1.08)}}
+  .hero .shimmer{position:absolute;inset:0;pointer-events:none;opacity:0;
+    background:linear-gradient(100deg,transparent 35%,rgba(232,168,107,.18) 50%,transparent 65%)}
+  [data-state="waking"] .hero .shimmer{opacity:1;animation:sweep 1.4s linear infinite}
+  @keyframes sweep{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
+  .hero .status{position:relative;font-size:32px;font-weight:600;line-height:1.15;letter-spacing:.2px}
+  .hero .uptime{position:relative;color:var(--muted);font-size:13px;margin-top:6px;min-height:18px}
+  .hero .cta{position:relative;margin-top:22px}
+
+  /* buttons */
+  button.btn{font-family:inherit;font-size:13px;font-weight:500;color:var(--text);background:var(--surface2);
+    border:1px solid var(--border);border-radius:var(--r-ctrl);padding:9px 15px;cursor:pointer;
+    transition:transform var(--t-fast),border-color var(--t-fast),background var(--t-fast)}
+  button.btn:hover{border-color:var(--borderWarm);background:var(--surfaceHover)}
+  button.btn:active{transform:translateY(1px)}
+  button.btn:disabled{opacity:.45;cursor:not-allowed}
+  button.btn.sm{padding:6px 11px;font-size:12px}
+  button.btn.ghost{background:transparent}
+  .primary{font-family:inherit;font-weight:600;font-size:15px;color:#1C130C;cursor:pointer;
+    border:1px solid #f3bd7e;border-top-color:#ffd9a8;border-radius:var(--r-ctrl);padding:13px 28px;
+    background:linear-gradient(180deg,var(--ember),var(--emberDeep));
+    box-shadow:inset 0 1px 0 rgba(255,226,168,.5),0 8px 22px -8px rgba(232,168,107,.6);
+    transition:transform var(--t-fast),filter var(--t-fast)}
+  .primary:hover{filter:brightness(1.05)}
+  .primary:active{transform:scale(.98) translateY(1px)}
+  .primary:disabled{cursor:default;filter:saturate(.6) brightness(.92)}
+  .primary.rest{background:linear-gradient(180deg,#3a2c22,#2c2017);color:var(--textDim);
+    border-color:var(--borderWarm);border-top-color:#6b4d2f;box-shadow:inset 0 1px 0 var(--topHi)}
+  .dots3::after{content:"";animation:dots 1.4s steps(4,end) infinite}
+  @keyframes dots{0%{content:""}25%{content:"·"}50%{content:"··"}75%{content:"···"}}
+
+  /* connect trophy */
+  .addrpill{display:flex;align-items:center;gap:12px;justify-content:space-between;width:100%;
+    background:var(--surface2);border:1px solid var(--border);border-radius:var(--r-ctrl);padding:13px 16px;
+    cursor:pointer;font-family:var(--mono);font-size:15px;font-weight:500;color:var(--text);
+    transition:border-color var(--t-fast)}
+  .addrpill:hover{border-color:var(--borderWarm)}
+  .addrpill.copied{border-color:var(--ember)}
+  .addrpill .ico{display:flex;color:var(--muted)}
+  .addrnote{margin-top:9px;font-size:12px;color:var(--muted);min-height:16px}
+  .tunline{display:flex;align-items:center;gap:7px;margin-top:11px;font-size:12px;color:var(--muted)}
+
+  /* presence coins */
+  .coins{display:flex;flex-wrap:wrap;gap:14px;margin-top:4px}
+  .coin{display:flex;flex-direction:column;align-items:center;gap:6px;width:64px;text-align:center}
+  .coin .disk{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;font-weight:600;
+    font-size:14px;color:#241a12;position:relative;
+    box-shadow:inset 0 1px 2px rgba(255,255,255,.4),inset 0 -2px 3px rgba(0,0,0,.28);
+    animation:pop .4s var(--overshoot)}
+  @keyframes pop{from{transform:scale(0)}to{transform:scale(1)}}
+  .coin .pdot{position:absolute;right:-1px;bottom:-1px;width:10px;height:10px;border-radius:50%;
+    background:var(--success);border:2px solid var(--surface);box-shadow:0 0 0 0 var(--successGlow)}
+  .coin .nm{font-size:12px;font-weight:500;max-width:64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .coin .seen{font-size:11px;color:var(--muted)}
+  .emptyfire{color:var(--muted);font-size:13px;font-style:italic}
+
+  /* console */
+  .log{font-family:var(--mono);font-size:13px;line-height:1.7;white-space:pre-wrap;word-break:break-word;color:var(--textDim)}
+  .log .ts{color:var(--muted)}
+  .log .join{color:var(--success)} .log .leave{color:var(--muted)}
+  .log .chat{color:var(--text)} .log .warn{color:var(--ember)} .log .err{color:var(--danger)}
+  .log .me{color:var(--muted)}
+  .peek{max-height:170px;overflow:hidden;-webkit-mask-image:linear-gradient(180deg,transparent,#000 38px);
+    mask-image:linear-gradient(180deg,transparent,#000 38px)}
+  .newline{border-left:2px solid var(--ember);padding-left:8px;margin-left:-10px;animation:tail 3s ease forwards}
+  @keyframes tail{from{border-color:var(--ember)}to{border-color:transparent}}
+  .console-wrap{background:#15100c;border:1px solid var(--border);border-radius:var(--r-ctrl);padding:14px 16px;
+    height:48vh;min-height:300px;overflow:auto}
+  .console-wrap::-webkit-scrollbar{width:10px}
+  .console-wrap::-webkit-scrollbar-thumb{background:var(--borderWarm);border-radius:8px}
+  .cmdbar{display:flex;gap:10px;margin-top:12px;position:relative}
+  .cmdbar input{flex:1}
+  .livedot{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)}
+
+  /* inputs */
+  input,select,textarea{font-family:inherit;font-size:13px;color:var(--text);background:var(--surface2);
+    border:1px solid var(--border);border-radius:var(--r-ctrl);padding:9px 12px;outline:none;transition:var(--t-fast)}
+  input:focus,select:focus,textarea:focus{border-color:var(--ember);box-shadow:0 0 0 2px var(--bg),0 0 0 4px rgba(232,168,107,.45)}
+
+  /* toggle */
+  .sw{position:relative;width:42px;height:24px;border-radius:var(--r-pill);background:#3a2c22;border:1px solid var(--border);
+    cursor:pointer;flex:none;transition:background 160ms var(--glide)}
+  .sw.on{background:linear-gradient(180deg,var(--ember),var(--emberDeep));border-color:#f3bd7e}
+  .sw b{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#cdbfae;
+    transition:left 160ms var(--glide),background 160ms;box-shadow:0 1px 2px rgba(0,0,0,.4)}
+  .sw.on b{left:20px;background:#fff5e6}
+  .togcard{display:flex;align-items:center;justify-content:space-between;gap:14px;background:var(--surface);
+    border:1px solid var(--border);border-radius:var(--r-ctrl);padding:14px 16px;box-shadow:inset 0 1px 0 var(--topHi)}
+  .togcard .lab{font-size:14px;font-weight:500}
+  .togcard .sub{font-size:12px;color:var(--muted);margin-top:2px}
+  .tg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+
+  /* segmented + stepper */
+  .seg{display:inline-flex;background:var(--surface2);border:1px solid var(--border);border-radius:var(--r-ctrl);padding:3px;gap:2px}
+  .seg button{border:none;background:transparent;color:var(--muted);font-family:inherit;font-size:13px;font-weight:500;
+    padding:6px 13px;border-radius:7px;cursor:pointer;transition:var(--t-fast)}
+  .seg button.on{background:var(--surfaceHover);color:var(--text)}
+  .stepper{display:inline-flex;align-items:center;gap:0;border:1px solid var(--border);border-radius:var(--r-ctrl);overflow:hidden}
+  .stepper button{border:none;background:var(--surface2);color:var(--text);width:34px;height:34px;cursor:pointer;font-size:16px}
+  .stepper button:hover{background:var(--surfaceHover)}
+  .stepper .v{min-width:46px;text-align:center;font-weight:600}
+  .motd-prev{margin-top:10px;background:#15100c;border:1px solid var(--border);border-radius:var(--r-ctrl);
+    padding:14px 16px;font-family:var(--mono);font-size:14px;line-height:1.6}
+
+  .disclosure{margin-top:8px;border-top:1px solid var(--border);padding-top:6px}
+  .disclosure>summary{cursor:pointer;list-style:none;color:var(--muted);font-size:13px;padding:10px 2px;font-weight:500}
+  .disclosure>summary::-webkit-details-marker{display:none}
+  .disclosure>summary::before{content:"⌄ ";display:inline-block;transition:transform var(--t-fast)}
+  .disclosure[open]>summary::before{transform:rotate(180deg)}
+  table.props{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px}
+  table.props td{padding:8px 6px;border-bottom:1px solid var(--border)}
+  table.props td:first-child{color:var(--muted);font-family:var(--mono);width:48%}
+  table.props input{width:100%}
+  table.props tr.dirty td{box-shadow:inset 2px 0 0 var(--ember)}
+
+  /* world/backup/mod rows */
+  .worldcard{position:relative}
+  .worldcard.active{border-color:var(--borderWarm);box-shadow:inset 0 1px 0 var(--topHi),0 0 0 1px rgba(232,168,107,.25)}
+  .tag{font-size:11px;font-weight:500;color:var(--muted);background:var(--surface2);border:1px solid var(--border);
+    border-radius:var(--r-pill);padding:2px 9px}
+  .listrow{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 16px;
+    background:var(--surface);border:1px solid var(--border);border-radius:var(--r-ctrl);margin-bottom:10px;
+    box-shadow:inset 0 1px 0 var(--topHi)}
+  .listrow .meta{font-size:12px;color:var(--muted);margin-top:2px}
+
+  /* modal + palette */
+  .scrim{position:fixed;inset:0;background:rgba(12,8,5,.6);display:none;place-items:center;z-index:60;padding:20px}
+  .scrim.show{display:grid;animation:fade var(--t-fast)}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+  .sheet{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);padding:24px;
+    width:440px;max-width:94vw;box-shadow:0 24px 60px -24px rgba(0,0,0,.6);animation:rise 200ms var(--overshoot)}
+  @keyframes rise{from{opacity:0;transform:translateY(12px) scale(.98)}to{opacity:1;transform:none}}
+  .sheet h3{margin:0 0 6px;font-size:18px;font-weight:600}
+  .sheet p{color:var(--muted);font-size:13px;margin:0 0 18px}
+  .hold{position:relative;overflow:hidden;border:1px solid #8a4636;background:#3a221c;color:#ffd9cf;
+    font-family:inherit;font-weight:600;font-size:14px;border-radius:var(--r-ctrl);padding:12px;cursor:pointer;
+    width:100%;user-select:none}
+  .hold .fill{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--danger);opacity:.32}
+  .hold span{position:relative}
+
+  .palette{width:540px;max-width:94vw;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);
+    box-shadow:0 24px 60px -24px rgba(0,0,0,.6);overflow:hidden;animation:rise 160ms var(--overshoot);align-self:start;margin-top:12vh}
+  .palette input{width:100%;border:none;border-bottom:1px solid var(--border);border-radius:0;background:transparent;
+    padding:16px 18px;font-size:15px;box-shadow:none}
+  .palette input:focus{box-shadow:none;border-color:var(--border)}
+  .pitems{max-height:340px;overflow:auto;padding:6px}
+  .pitem{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 13px;border-radius:var(--r-ctrl);
+    cursor:pointer;font-size:14px}
+  .pitem.sel{background:var(--surfaceHover)}
+  .pitem .k{font-family:var(--mono);font-size:11px;color:var(--muted)}
+
+  .toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(10px);background:var(--surface);
+    border:1px solid var(--ember);color:var(--text);padding:12px 18px;border-radius:var(--r-ctrl);font-size:13px;font-weight:500;
+    box-shadow:0 16px 40px -16px rgba(0,0,0,.6);opacity:0;transition:var(--t-mid);pointer-events:none;z-index:80}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+  .ghosthint{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--muted);font-family:var(--mono);
+    font-size:12px;pointer-events:none;opacity:0}
+  .hint-row{font-size:11px;color:var(--muted);margin-top:7px}
+
+  @media (max-width:760px){
+    .app{flex-direction:column}
+    .rail{width:auto;height:auto;flex-direction:row;align-items:center;position:sticky;top:0;z-index:20;overflow-x:auto;padding:8px 10px}
+    .wm{padding:4px 8px 4px 4px} .wm small{display:none}
+    nav{flex-direction:row;margin-top:0} nav button{padding:8px 10px;font-size:0;gap:0}
+    nav button.on::before{display:none} nav button svg{width:20px;height:20px}
+    .railfoot{display:none} .main{height:auto} .col{padding:24px 18px 70px}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{animation:none!important;transition-duration:80ms!important}
+    .hero .glow{opacity:calc(var(--ember-on)*.4)}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="rail">
+    <button class="wm" id="wmBtn" onclick="toggleSwitcher(event)">
+      <span class="flame">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c2 3 4 4.5 4 8a4 4 0 0 1-8 0c0-1.2.4-2 1-2.8C9 10 8 11 8 12.5"/><path d="M12 21a5 5 0 0 0 5-5c0-2-1-3.5-2.5-4.8"/></svg>
+      </span>
+      <span class="wmtxt"><b id="wmName">Hearth</b><small id="wmGroup">your worlds</small></span>
+      <span class="chev">⌄</span>
+    </button>
+    <div class="switcher" id="switcher"></div>
+    <nav id="nav"></nav>
+    <div class="railfoot">
+      <div class="ministatus"><span class="ember-dot"></span><span id="miniStatus">Asleep</span></div>
+      <a class="quit" href="#" onclick="quitPanel();return false">Put the panel to bed →</a>
+    </div>
+  </aside>
+
+  <main class="main"><div class="col" id="col"></div></main>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<div class="scrim" id="paletteScrim" style="align-items:flex-start"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ---------------- icons ---------------- */
+const ICON={
+  home:'<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/>',
+  worlds:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 2.5 15 0 18M12 3c-2.5 2.5-2.5 15 0 18"/>',
+  settings:'<circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.3l2-1.5-2-3.4-2.3 1a7 7 0 0 0-2.3-1.3L13.8 2h-3.6l-.5 2.5A7 7 0 0 0 7.4 5.8l-2.3-1-2 3.4 2 1.5a7 7 0 0 0 0 2.6l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 2.3 1.3l.5 2.5h3.6l.5-2.5a7 7 0 0 0 2.3-1.3l2.3 1 2-3.4-2-1.5c.07-.43.1-.86.1-1.3Z"/>',
+  mods:'<path d="M10 3H5a2 2 0 0 0-2 2v5h3a2 2 0 1 1 0 4H3v5a2 2 0 0 0 2 2h5v-3a2 2 0 1 1 4 0v3h5a2 2 0 0 0 2-2v-5h-3a2 2 0 1 1 0-4h3V5a2 2 0 0 0-2-2h-5v3a2 2 0 1 1-4 0Z"/>',
+  console:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/>',
+  backups:'<path d="M3 7l1.5 12.5a2 2 0 0 0 2 1.5h11a2 2 0 0 0 2-1.5L21 7"/><rect x="2" y="3" width="20" height="4" rx="1"/><path d="M10 11h4"/>',
+};
+const sicon=(p,s=16)=>`<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
+const copyIco='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg>';
+const checkIco='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4 10-11"/></svg>';
+
+/* ---------------- state ---------------- */
+const TABS=[['home','Home'],['worlds','Worlds'],['settings','Settings'],['mods','Mods'],['console','Console'],['backups','Backups']];
+let STATE=null, ACTIVE=null, CUR='home', PROPS={}, DIRTY={}, LOG=[], lastNewIdx=-1;
+let EMPTY=null;   // null until the first poll — so we always paint once we know
+let cmdHist=[], cmdIdx=-1;
+
+async function api(p,m='GET',b){const o={method:m,headers:{'Content-Type':'application/json'}};if(b)o.body=JSON.stringify(b);return (await fetch(p,o)).json();}
+function el(id){return document.getElementById(id);}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function attr(s){return String(s).replace(/"/g,'&quot;');}
+function iconUrl(name,ver){return '/api/icon?name='+encodeURIComponent(name)+'&v='+(ver||0);}
+function toast(m){const t=el('toast');t.textContent=m;t.classList.add('show');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('show'),3000);}
+
+/* nav */
+function buildNav(){el('nav').innerHTML=TABS.map(([k,l])=>`<button data-k="${k}" onclick="go('${k}')">${sicon(ICON[k])}<span>${l}</span></button>`).join('');}
+function go(k){CUR=k;document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.k===k));render();}
+
+/* ---------------- presence + log parsing ---------------- */
+function presenceFrom(lines){
+  const on=new Map();
+  for(const l of lines){
+    if(/Starting minecraft server/.test(l)) on.clear();
+    let m;
+    if((m=l.match(/\]:\s+([A-Za-z0-9_]{2,16}) joined the game/))){const t=(l.match(/\[(\d\d:\d\d:\d\d)\]/)||[])[1];on.set(m[1],t);}
+    else if((m=l.match(/\]:\s+([A-Za-z0-9_]{2,16}) (?:left the game|lost connection)/))) on.delete(m[1]);
+  }
+  return on;
+}
+function ago(t){if(!t)return 'here';const n=new Date();const p=t.split(':').map(Number);const d=new Date(n);d.setHours(p[0],p[1],p[2]||0,0);let mi=Math.floor((n-d)/60000);if(mi<0)mi+=1440;if(mi<1)return 'just now';if(mi<60)return mi+'m ago';return Math.floor(mi/60)+'h ago';}
+function uptimeFromLog(lines){for(let i=lines.length-1;i>=0;i--){if(/Done \(/.test(lines[i])){const t=(lines[i].match(/\[(\d\d:\d\d:\d\d)\]/)||[])[1];if(t){const a=ago(t);return a==='just now'?'lit just now':'lit '+a;}}}return 'the fire is lit';}
+function coinHue(n){let h=0;for(const c of n)h=(h*31+c.charCodeAt(0))%9999;return 20+(h%26);}
+function coin(name,seen){const hu=coinHue(name);const ini=name.replace(/[^A-Za-z0-9]/g,'').slice(0,2).toUpperCase()||name[0];
+  return `<div class="coin"><div class="disk" style="background:linear-gradient(145deg,hsl(${hu} 58% 60%),hsl(${hu-8} 52% 42%))">${esc(ini)}<span class="pdot"></span></div>
+    <div class="nm" title="${attr(name)}">${esc(name)}</div><div class="seen">${seen?'joined '+ago(seen):'here'}</div></div>`;}
+
+function fmtLog(lines,newFrom){
+  return lines.map((l,i)=>{
+    let cls='';
+    if(/ERROR|Exception/.test(l))cls='err';
+    else if(/\bWARN\]/.test(l))cls='warn';
+    else if(/joined the game/.test(l))cls='join';
+    else if(/left the game|lost connection/.test(l))cls='leave';
+    else if(/\]:\s*(\[Not Secure\]\s*)?<[^>]+>/.test(l))cls='chat';
+    let h=esc(l).replace(/^(\[\d\d:\d\d:\d\d\])/,'<span class="ts">$1</span>');
+    h=`<span class="${cls}">${h}</span>`;
+    if(newFrom!=null&&i>=newFrom&&i===lines.length-1)h=`<span class="newline">${h}</span>`;
+    return h;
+  }).join('\n');
+}
+
+/* ---------------- mood ---------------- */
+function moodOf(cur){if(!cur||!cur.running)return 'asleep';return cur.ready?'online':'waking';}
+function applyMood(cur){
+  const s=moodOf(cur);
+  document.documentElement.setAttribute('data-state',s);
+  document.documentElement.style.setProperty('--ember-on', s==='online'?'.9':s==='waking'?'.5':'0');
+  return s;
+}
+
+/* ---------------- poll ---------------- */
+async function tick(){
+  try{
+    STATE=await api('/api/state');
+    if(!ACTIVE)ACTIVE=STATE.active;
+    const wasEmpty=EMPTY;EMPTY=!STATE.servers.length;
+    if(EMPTY!==wasEmpty){render();}          // first world created, or last one removed
+    const cur=STATE.servers.find(s=>s.name===ACTIVE)||STATE.servers[0];
+    applyMood(cur);
+    const lit=STATE.servers.filter(s=>s.running).length;
+    const total=STATE.servers.reduce((a,s)=>a+((s.players||[]).length),0);
+    el('miniStatus').textContent = lit?`${lit} world${lit>1?'s':''} lit · ${total} online`:'all worlds asleep';
+    renderSwitcher();
+    if(CUR==='home'||CUR==='console'){await pollLog();}
+    if(CUR==='home')renderHomeLive(cur);
+    if(CUR==='worlds')renderWorldsLive();
+  }catch(e){}
+}
+let liveCount=0;
+async function pollLog(){
+  try{
+    const tun = CUR==='console' && el('showTun') && el('showTun').checked;
+    const r=await api(tun?'/api/log?tunnel=1':'/api/log?name='+encodeURIComponent(ACTIVE));
+    LOG=r.lines||[];
+  }catch(e){LOG=[];}
+}
+
+/* ---------------- render ---------------- */
+function render(){const c=el('col');c.style.animation='none';void c.offsetWidth;c.style.animation='';
+  c.innerHTML='';c.classList.add('page');
+  if(STATE&&!STATE.servers.length&&CUR!=='worlds'){c.innerHTML=viewEmpty();return;}
+  if(CUR==='home')c.innerHTML=viewHome();
+  else if(CUR==='worlds')c.innerHTML=viewWorlds();
+  else if(CUR==='settings'){c.innerHTML=viewSettingsShell();loadSettings();}
+  else if(CUR==='mods'){c.innerHTML=viewModsShell();loadMods();}
+  else if(CUR==='console')c.innerHTML=viewConsole();
+  else if(CUR==='backups'){c.innerHTML=viewBackupsShell();loadBackups();}
+  if(CUR==='home'){renderHomeLive(STATE&&STATE.servers.find(s=>s.name===ACTIVE));pollLog().then(()=>{renderPeek();renderPresence();});}
+  if(CUR==='console'){pollLog().then(()=>{renderFullLog();const w=el('cWrap');if(w)w.scrollTop=w.scrollHeight;});}
+}
+
+/* first run — no servers set up yet */
+function viewEmpty(){return `
+  <div class="card hero paper">
+    <div class="status">No worlds yet</div>
+    <div class="uptime">Create a fresh server, or add a folder you already have to <span class="mono">config.json</span>.</div>
+    <div class="cta"><button class="primary" onclick="openCreate()">＋ Create a world</button></div>
+  </div>`;}
+
+/* HOME */
+function viewHome(){
+  return `
+  <div class="card hero paper" id="hero">
+    <div class="glow"></div><div class="shimmer"></div>
+    <div class="status" id="heroStatus">—</div>
+    <div class="uptime" id="heroUptime"></div>
+    <div class="cta"><button class="primary" id="heroBtn" onclick="toggleServer()">—</button></div>
+  </div>
+  <div class="card paper">
+    <div class="eyebrow">Connect address</div>
+    <div style="height:10px"></div>
+    <div class="addrpill" id="addrPill" onclick="copyAddr()"><span id="addrTxt" class="mono">—</span><span class="ico" id="addrIco">${copyIco}</span></div>
+    <div class="addrnote" id="addrNote"></div>
+    <div class="tunline" id="tunLine"></div>
+  </div>
+  <div class="card paper">
+    <div class="between"><div class="eyebrow">Who's by the fire</div><span class="num" id="fireCount" style="color:var(--muted);font-size:12px"></span></div>
+    <div style="height:14px"></div>
+    <div class="coins" id="coins"></div>
+  </div>
+  <div class="card paper">
+    <div class="between"><div class="eyebrow">What's happening</div><span class="livedot"><span class="ember-dot"></span>live</span></div>
+    <div style="height:12px"></div>
+    <div class="log peek" id="peek"></div>
+  </div>`;
+}
+function renderHomeLive(cur){
+  if(CUR!=='home'||!cur)return;
+  const s=moodOf(cur);
+  const map={asleep:['Asleep','','Light the hearth'],waking:['Waking…','getting things warm','Waking…'],online:['Online','',"Let it rest"]};
+  const hs=el('heroStatus'),hu=el('heroUptime'),hb=el('heroBtn');
+  if(hs)hs.textContent=map[s][0];
+  if(hu)hu.textContent=s==='online'?uptimeFromLog(LOG):map[s][1];
+  if(hb){hb.textContent=map[s][2];hb.classList.toggle('rest',s==='online');hb.classList.toggle('dots3',s==='waking');hb.disabled=(s==='waking');}
+  // address
+  const at=el('addrTxt'),an=el('addrNote'),tl=el('tunLine');
+  if(cur.hasTunnel&&cur.address){
+    if(at)at.textContent=cur.address;
+    if(an&&!an._lock)an.innerHTML=`Tap to copy — hand this to your friends.`;
+    const ton=STATE.tunnel.running;
+    if(tl)tl.innerHTML=ton?`<span class="ember-dot"></span> Public door is open`:`<span style="width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block"></span> Door closed — only you can join. <a href="#" onclick="tun('start');return false">Open it</a>`;
+  }else{if(at)at.textContent='localhost';if(an)an.innerHTML='LAN only — connect with <b>localhost</b> on this PC.';if(tl)tl.innerHTML='';}
+}
+function renderPeek(){const p=el('peek');if(!p)return;p.innerHTML=fmtLog(LOG.slice(-7),6);}
+function renderPresence(){
+  const c=el('coins');if(!c)return;
+  const on=presenceFrom(LOG);liveCount=on.size;
+  const fc=el('fireCount');if(fc)fc.textContent=on.size?`${on.size} online`:'';
+  if(!on.size){c.innerHTML=`<div class="emptyfire">The fire's lit, but no one's home yet.</div>`;
+    const cur=STATE&&STATE.servers.find(s=>s.name===ACTIVE);
+    if(cur&&!cur.running)c.innerHTML=`<div class="emptyfire">The hearth is cold. Light it to invite friends in.</div>`;
+    return;}
+  c.innerHTML=[...on.entries()].map(([n,t])=>coin(n,t)).join('');
+}
+
+/* WORLDS — multi-server command center */
+function viewWorlds(){const bk=(STATE&&STATE.bank)||{total:0,free:0};
+  return `<h1 class="page-h">Your Worlds</h1><p class="page-sub">Each world is its own server for a friend group — run as many as you like, side by side.</p>
+  <div class="between" style="margin-bottom:18px">
+    <button class="btn" onclick="openCreate()">＋ New world</button>
+    <button class="btn ghost" onclick="openBank()">🎟️ Tunnel bank · ${bk.total?(bk.free+' / '+bk.total+' free'):'not set up'}</button>
+  </div>
+  <div class="grid" id="wGrid" style="grid-template-columns:repeat(auto-fill,minmax(320px,1fr))"></div>`;}
+function miniCoin(n){const hu=coinHue(n);const ini=n.replace(/[^A-Za-z0-9]/g,'').slice(0,2).toUpperCase()||n[0];
+  return `<span class="minicoin" title="${attr(n)}" style="background:linear-gradient(145deg,hsl(${hu} 58% 60%),hsl(${hu-8} 52% 42%))">${esc(ini)}</span>`;}
+function renderWorldsLive(){const g=el('wGrid');if(!g||!STATE)return;
+  if(!STATE.servers.length){g.innerHTML='<div class="emptyfire">No worlds yet — hit ＋ New world to make one.</div>';return;}
+  g.innerHTML=STATE.servers.map(s=>{const foc=s.name===ACTIVE;const pl=s.players||[];
+    const addr = s.hasTunnel&&s.address
+      ? `<div class="addrpill" style="margin-top:12px;font-size:13px;padding:10px 13px" onclick="copyFor('${attr(s.address)}')"><span class="mono">${esc(s.address)}</span><span class="ico">${copyIco}</span></div>`
+      : `<div class="muted" style="margin-top:12px">No public address yet · <a href="#" onclick="editMeta('${attr(s.name)}');return false">set it up</a></div>`;
+    return `<div class="card worldcard paper ${foc?'active':''}">
+      <div class="between">
+        <div style="min-width:0"><div class="eyebrow" style="${s.group?'color:var(--ember)':''}">${esc(s.group||'no group')}${foc?' · focused':''}</div>
+          <div style="font-size:17px;font-weight:600;margin:4px 0 2px;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:8px"><span title="Change world icon" onclick="event.stopPropagation();openIcon('${attr(s.name)}')" style="cursor:pointer;flex:none;display:inline-flex">${s.hasIcon?`<img src="${iconUrl(s.name,s.iconVer)}" width="22" height="22" style="border-radius:5px;display:block"/>`:`<span style="width:22px;height:22px;border-radius:5px;border:1px dashed var(--border);display:grid;place-items:center;color:var(--muted);font-size:13px;line-height:1">＋</span>`}</span>${esc(s.name)}</div></div>
+        <span class="gd ${s.running?'lit':''}"></span>
+      </div>
+      <div class="meta">${esc(s.type)} · port ${s.port} · <span style="color:${s.running?'var(--success)':'var(--muted)'}">${s.running?(pl.length+' online'):'asleep'}</span></div>
+      ${s.running&&pl.length?`<div style="margin-top:10px;display:flex;gap:5px;flex-wrap:wrap">${pl.map(miniCoin).join('')}</div>`:''}
+      ${addr}
+      <div class="row" style="margin-top:14px">
+        ${s.running?`<button class="btn sm" onclick="stopOne('${attr(s.name)}')">🌙 Stop</button>`:`<button class="btn sm" style="border-color:var(--borderWarm);color:var(--ember)" onclick="startOne('${attr(s.name)}')">🔥 Start</button>`}
+        ${foc?`<span class="btn sm" style="opacity:.5;cursor:default">✓ focused</span>`:`<button class="btn sm" onclick="focusServer('${attr(s.name)}')">Focus</button>`}
+        <button class="btn sm" onclick="editMeta('${attr(s.name)}')">Edit</button>
+        <button class="btn sm" onclick="openIcon('${attr(s.name)}')">Icon</button>
+        ${s.protected?'':`<button class="btn sm" style="color:var(--danger)" onclick="askDelete('${attr(s.name)}')">Delete</button>`}
+      </div></div>`;}).join('');
+}
+async function startOne(n){const r=await api('/api/server/start','POST',{name:n});toast(r.msg);tick();}
+async function stopOne(n){const r=await api('/api/server/stop','POST',{name:n});toast(r.msg);tick();}
+function copyFor(a){navigator.clipboard.writeText(a);toast('Copied '+a);}
+function editMeta(name){const s=STATE.servers.find(x=>x.name===name)||{};
+  el('scrim').innerHTML=`<div class="sheet"><h3>Edit ${esc(name)}</h3><p>A friendly group label and the public join address for this world.</p>
+    <div style="display:grid;gap:14px">
+      <label>Friend group<input id="mGroup" placeholder="e.g. College squad" value="${attr(s.group||'')}" style="width:100%;margin-top:5px"/></label>
+      <label>Public address<input id="mAddr" placeholder="from playit.gg — e.g. coolname.gl.joinmc.link" value="${attr(s.address||'')}" style="width:100%;margin-top:5px"/>
+        <div class="hint-row">Add a tunnel for <b>port ${s.port}</b> on playit.gg, then paste its address here — the running agent serves it automatically.</div></label>
+      <div><div style="font-size:14px;font-weight:600">World icon <span class="muted" style="font-weight:400">— shows next to this world in the server list</span></div>
+        <div class="row" style="margin-top:8px;align-items:center">
+          ${s.hasIcon?`<img src="${iconUrl(name,s.iconVer)}" width="48" height="48" style="border-radius:8px;border:1px solid var(--border)"/>`:`<div style="width:48px;height:48px;border-radius:8px;border:1px dashed var(--border);display:grid;place-items:center;color:var(--muted);font-size:10px">none</div>`}
+          <button class="btn sm" type="button" onclick="openIcon('${attr(name)}')">Change icon…</button>
+        </div></div>
+    </div>
+    <div class="row" style="justify-content:flex-end;margin-top:18px"><button class="btn ghost" onclick="closeScrim()">Cancel</button>
+      <button class="primary" style="font-size:13px;padding:10px 20px" onclick="saveMeta('${attr(name)}')">Save</button></div></div>`;
+  el('scrim').classList.add('show');}
+async function saveMeta(name){const group=el('mGroup').value,address=el('mAddr').value.trim();
+  const r=await api('/api/server/meta','POST',{name,group,address});toast(r.ok?'Saved':r.msg);closeScrim();tick();render();}
+function iconPreviewHtml(s){return s.hasIcon
+  ? `<img src="${iconUrl(s.name,s.iconVer)}" width="64" height="64" style="border-radius:10px;border:1px solid var(--border);display:block"/>`
+  : `<div style="width:64px;height:64px;border-radius:10px;border:1px dashed var(--border);display:grid;place-items:center;color:var(--muted);font-size:11px">none</div>`;}
+function openIcon(name){const s=(STATE&&STATE.servers.find(x=>x.name===name))||{name:name,hasIcon:false};
+  el('scrim').innerHTML=`<div class="sheet"><h3>World icon · ${esc(name)}</h3>
+    <p>Shows next to this world in your friends' Minecraft server list. Pick any image — it's auto-sized to 64×64.</p>
+    <div class="row" style="align-items:center;gap:16px">${iconPreviewHtml(s)}
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <label class="btn sm" style="cursor:pointer;text-align:center">Choose image…<input type="file" accept="image/*" style="display:none" onchange="uploadIcon('${attr(name)}',this)"/></label>
+        ${s.hasIcon?`<button class="btn sm" type="button" style="color:var(--danger)" onclick="removeIcon('${attr(name)}')">Remove icon</button>`:''}
+      </div></div>
+    <div class="hint-row" style="margin-top:14px">Tip: restart this world afterward so friends see the new icon in their server list.</div>
+    <div class="row" style="justify-content:flex-end;margin-top:18px"><button class="btn ghost" onclick="closeScrim()">Done</button></div></div>`;
+  el('scrim').classList.add('show');}
+function uploadIcon(name,input){const f=input.files&&input.files[0];if(!f)return;
+  const rd=new FileReader();rd.onload=async()=>{toast('Setting icon…');const r=await api('/api/server/icon','POST',{name,data:rd.result});toast(r.msg);await tick();if(el('scrim').classList.contains('show'))openIcon(name);};rd.readAsDataURL(f);}
+async function removeIcon(name){const r=await api('/api/server/icon/remove','POST',{name});toast(r.msg);await tick();if(el('scrim').classList.contains('show'))openIcon(name);}
+
+/* tunnel bank */
+async function openBank(){const r=await api('/api/bank');
+  const text=(r.slots||[]).map(s=>`${s.port} ${s.address}`).join('\n');
+  el('scrim').innerHTML=`<div class="sheet" style="width:540px"><h3>🎟️ Tunnel bank</h3>
+    <p>Pre-make a batch of tunnels on playit.gg (one per port) and list them here. New worlds auto-grab a free one — and when you delete a world, its tunnel returns to the pool to be reused. ${r.total?`<b style="color:var(--ember)">${r.free} of ${r.total} free.</b>`:''}</p>
+    <div class="hint-row" style="margin-bottom:6px">One per line — <b>port&nbsp;&nbsp;address</b> (e.g. <span class="mono">25566 chill-cabin.gl.joinmc.link</span>)</div>
+    <textarea id="bankTxt" spellcheck="false" style="width:100%;height:190px;font-family:var(--mono);font-size:12px;resize:vertical;line-height:1.6" placeholder="25566 myworld1.gl.joinmc.link">${esc(text)}</textarea>
+    ${r.total?`<div class="hint-row" style="margin-top:8px">In use: ${(r.slots||[]).filter(s=>s.usedBy).map(s=>`<span class="tag">${esc(s.port)} → ${esc(s.usedBy)}</span>`).join(' ')||'<span class="muted">none</span>'}</div>`:''}
+    <div class="row" style="justify-content:flex-end;margin-top:16px"><button class="btn ghost" onclick="closeScrim()">Cancel</button>
+      <button class="primary" style="font-size:13px;padding:10px 20px" onclick="saveBank()">Save bank</button></div></div>`;
+  el('scrim').classList.add('show');}
+async function saveBank(){const text=el('bankTxt').value;const r=await api('/api/bank','POST',{text});toast(r.msg);closeScrim();tick();render();}
+
+/* rail server switcher */
+function renderSwitcher(){if(!STATE)return;const cur=STATE.servers.find(s=>s.name===ACTIVE)||STATE.servers[0];
+  if(cur){const wn=el('wmName'),wg=el('wmGroup');if(wn)wn.textContent=cur.name;if(wg)wg.textContent=cur.group||(cur.running?((cur.players||[]).length+' online'):'asleep');}
+  const sw=el('switcher');if(!sw)return;
+  sw.innerHTML=STATE.servers.map(s=>`<div class="swrow ${s.name===ACTIVE?'on':''}" onclick="focusServer('${attr(s.name)}')">
+      <span class="gd ${s.running?'lit':''}"></span><span class="nm">${esc(s.name)}</span>
+      <span class="gp">${esc(s.group||(s.running?(s.players||[]).length+' on':'asleep'))}</span></div>`).join('')
+    +`<div class="swrow new" onclick="openCreate();closeSwitcher()">＋  New world</div>`;}
+function toggleSwitcher(e){if(e)e.stopPropagation();const sw=el('switcher'),b=el('wmBtn');if(!sw)return;sw.classList.toggle('show');if(b)b.classList.toggle('open');}
+function closeSwitcher(){const sw=el('switcher'),b=el('wmBtn');if(sw)sw.classList.remove('show');if(b)b.classList.remove('open');}
+function focusServer(n){ACTIVE=n;api('/api/server/setactive','POST',{name:n});closeSwitcher();tick();render();}
+
+/* SETTINGS */
+const TOGS=[
+  ['pvp','PvP','Let players fight each other'],
+  ['hardcore','Hardcore','One life — death bans you'],
+  ['white-list','Whitelist only','Only approved names can join'],
+  ['allow-flight','Allow flight','Permit flying (anti-cheat off)'],
+  ['enable-command-block','Command blocks','Allow redstone command blocks'],
+  ['online-mode','Online mode','OFF = cracked friends can join. WARNING: never toggle while people play — it swaps everyone&#39;s save'],
+];
+function viewSettingsShell(){return `<h1 class="page-h">Settings</h1><p class="page-sub">Editing <b>${esc(ACTIVE||'')}</b> · changes take hold next time it wakes.</p><div id="setBody"><div class="emptyfire">Loading…</div></div>`;}
+async function loadSettings(){const r=await api('/api/properties?name='+encodeURIComponent(ACTIVE));PROPS=r.props||{};DIRTY={};renderSettings();}
+function pval(k){return (k in DIRTY)?DIRTY[k]:(PROPS[k]??'');}
+function renderSettings(){
+  const b=el('setBody');if(!b)return;
+  const diff=['peaceful','easy','normal','hard'];
+  const renderMotdPrev=()=>motdHtml(pval('motd'));
+  b.innerHTML=`
+  <div class="tg-grid">${TOGS.map(([k,l,s])=>{const on=String(pval(k))==='true';
+    return `<div class="togcard"><div><div class="lab">${l}</div><div class="sub">${s}</div></div>
+      <div class="sw ${on?'on':''}" onclick="tog('${k}',this)"><b></b></div></div>`;}).join('')}</div>
+
+  <div class="card paper" style="margin-top:16px"><div class="between">
+    <div><div class="lab" style="font-weight:600">Difficulty</div><div class="sub" style="color:var(--muted);font-size:12px">how dangerous the nights get</div></div>
+    <div class="seg">${diff.map(d=>`<button class="${pval('difficulty')===d?'on':''}" onclick="setField('difficulty','${d}');renderSettings()">${d}</button>`).join('')}</div>
+  </div></div>
+
+  <div class="card paper"><div class="between">
+    <div><div class="lab" style="font-weight:600">Max players</div><div class="sub" style="color:var(--muted);font-size:12px">how many can be by the fire at once</div></div>
+    <div class="stepper"><button onclick="bump('max-players',-1)">−</button><span class="v num" id="mpV">${esc(pval('max-players')||'20')}</span><button onclick="bump('max-players',1)">+</button></div>
+  </div></div>
+
+  <div class="card paper">
+    <div class="lab" style="font-weight:600">Server message</div>
+    <div class="sub" style="color:var(--muted);font-size:12px;margin-bottom:10px">shown in the multiplayer list. § codes colorize.</div>
+    <input style="width:100%" id="motdIn" value="${attr(pval('motd'))}" oninput="setField('motd',this.value);el('motdPrev').innerHTML=motdHtml(this.value)"/>
+    <div class="motd-prev" id="motdPrev">${renderMotdPrev()}</div>
+  </div>
+
+  <details class="disclosure"><summary>Advanced — all server.properties</summary>
+    <table class="props">${Object.keys(PROPS).sort().map(k=>`<tr id="row-${attr(k)}"><td>${esc(k)}</td>
+      <td><input value="${attr(pval(k))}" oninput="setField('${attr(k)}',this.value);this.closest('tr').classList.add('dirty')"/></td></tr>`).join('')}</table>
+  </details>
+
+  <div class="row" style="margin-top:20px"><button class="primary" style="font-size:13px;padding:11px 22px" onclick="saveSettings()">Save changes</button>
+    <span id="saveNote" style="color:var(--success);font-size:13px"></span></div>`;
+}
+function setField(k,v){DIRTY[k]=v;}
+function tog(k,node){const on=!(String(pval(k))==='true');DIRTY[k]=on?'true':'false';if(k==='white-list')DIRTY['enforce-whitelist']=on?'true':'false';node.classList.toggle('on',on);}
+function bump(k,d){const v=Math.max(1,(parseInt(pval(k)||'20',10)+d));DIRTY[k]=String(v);const e=el('mpV');if(e)e.textContent=v;}
+function MOTDCOL(){return {'0':'#000','1':'#00A','2':'#0A0','3':'#0AA','4':'#A00','5':'#A0A','6':'#FA0','7':'#AAA','8':'#555','9':'#55F','a':'#5F5','b':'#5FF','c':'#F55','d':'#F5F','e':'#FF5','f':'#FFF'};}
+function motdHtml(s){if(!s)return '<span style="color:var(--muted)">(empty)</span>';const C=MOTDCOL();let col='#AAA',bold=false,out='';s=s.replace(/\\\\u00a7|§/g,'§');
+  for(let i=0;i<s.length;i++){if(s[i]==='§'&&i+1<s.length){const c=s[++i].toLowerCase();if(C[c])col=C[c];else if(c==='l')bold=true;else if(c==='r'){col='#AAA';bold=false;}continue;}
+    out+=`<span style="color:${col};${bold?'font-weight:700':''}">${esc(s[i])}</span>`;}
+  return out;}
+async function saveSettings(){if(!Object.keys(DIRTY).length){el('saveNote').textContent='nothing changed';setTimeout(()=>el('saveNote').textContent='',1500);return;}
+  const r=await api('/api/properties/save','POST',{name:ACTIVE,props:DIRTY});if(r.ok){Object.assign(PROPS,DIRTY);DIRTY={};el('saveNote').textContent='✓ saved';setTimeout(()=>{const n=el('saveNote');if(n)n.textContent='';},2200);}else toast(r.msg);}
+
+/* MODS */
+function viewModsShell(){return `<h1 class="page-h">Mods &amp; Plugins</h1><p class="page-sub">For <b>${esc(ACTIVE||'')}</b></p><div id="modBody"><div class="emptyfire">Loading…</div></div>`;}
+async function loadMods(){const r=await api('/api/mods?name='+encodeURIComponent(ACTIVE));const b=el('modBody');if(!b)return;
+  if(!r.supported){b.innerHTML=`<div class="card paper"><div class="emptyfire" style="margin-bottom:14px">${esc(r.note||'')}</div>
+    <button class="btn" onclick="convertPaper('${attr(ACTIVE)}')">→ Convert this world to Paper</button></div>`;return;}
+  b.innerHTML=`<div class="card paper"><div class="row" style="margin-bottom:6px">
+      <input id="modUrl" placeholder="paste a plugin URL or file path" style="flex:1"/><button class="btn" onclick="addMod()">＋ Add</button></div>
+      <div class="meta" style="font-size:12px;color:var(--muted)">${r.items.length} ${esc(r.kind)}(s) installed · restart to apply</div></div>
+    ${r.items.length?r.items.map(f=>`<div class="listrow"><div>${esc(f)}</div><button class="btn sm" style="color:var(--danger)" onclick="rmMod('${attr(f)}')">remove</button></div>`).join(''):'<div class="emptyfire">No plugins yet — the world runs vanilla.</div>'}`;}
+async function addMod(){const u=el('modUrl').value.trim();if(!u){toast('Paste a URL or file path.');return;}toast('Adding…');const r=await api('/api/mods/add','POST',{name:ACTIVE,url:u});toast(r.msg);loadMods();}
+async function rmMod(f){const r=await api('/api/mods/remove','POST',{name:ACTIVE,file:f});toast(r.msg);loadMods();}
+
+/* CONSOLE */
+function viewConsole(){return `<h1 class="page-h">Console</h1><p class="page-sub">Server output &amp; commands · <label style="color:var(--muted)"><input type="checkbox" id="showTun" onchange="pollLog().then(renderFullLog)"/> tunnel log</label></p>
+  <div class="console-wrap" id="cWrap"><div class="log" id="fullLog"></div></div>
+  <div class="cmdbar"><input id="cmd" placeholder="run a command — try /say, /time set day, /op …" autocomplete="off"
+      onkeydown="cmdKey(event)" oninput="ghost(this.value)"/><span class="ghosthint" id="ghost"></span>
+    <button class="primary" style="font-size:13px;padding:9px 18px" onclick="sendCmd()">Send</button></div>
+  <div class="hint-row">↑/↓ recalls history · ⌘K opens the command palette</div>`;}
+function renderFullLog(){const f=el('fullLog');if(!f)return;const w=el('cWrap');const atB=w?(w.scrollHeight-w.scrollTop-w.clientHeight<50):true;
+  f.innerHTML=fmtLog(LOG,LOG.length-1);if(atB&&w)w.scrollTop=w.scrollHeight;}
+const GHOSTS=['/say ','/time set day','/weather clear','/op ','/gamemode creative','/tp '];
+function ghost(v){const g=el('ghost');if(!g)return;if(v==='/'){g.textContent='try: '+GHOSTS.join('  ');g.style.opacity='.7';}else g.style.opacity='0';}
+function cmdKey(e){const i=e.target;
+  if(e.key==='Enter'){sendCmd();return;}
+  if(e.key==='ArrowUp'){if(cmdHist.length){cmdIdx=Math.max(0,(cmdIdx<0?cmdHist.length:cmdIdx)-1);i.value=cmdHist[cmdIdx]||'';}e.preventDefault();}
+  if(e.key==='ArrowDown'){if(cmdHist.length&&cmdIdx>=0){cmdIdx=Math.min(cmdHist.length,cmdIdx+1);i.value=cmdHist[cmdIdx]||'';}e.preventDefault();}}
+async function sendCmd(){const c=el('cmd');if(!c||!c.value.trim())return;const v=c.value;cmdHist.push(v);cmdIdx=-1;
+  const r=await api('/api/server/command','POST',{name:ACTIVE,cmd:v});if(!r.ok)toast(r.msg);c.value='';ghost('');setTimeout(()=>pollLog().then(renderFullLog),350);}
+
+/* BACKUPS */
+function viewBackupsShell(){return `<h1 class="page-h">Backups</h1><p class="page-sub">Auto-saved on every rest + every 2 hours · keeps the last 15.</p>
+  <div class="row" style="margin-bottom:18px"><button class="btn" id="bkNow" onclick="doBackup()">Back up now</button></div>
+  <div id="bkBody"><div class="emptyfire">Loading…</div></div>`;}
+async function loadBackups(){const r=await api('/api/backups?name='+encodeURIComponent(ACTIVE));const b=el('bkBody');if(!b)return;const list=r.list||[];
+  if(!list.length){b.innerHTML='<div class="emptyfire">No backups yet — one is made the next time it rests.</div>';return;}
+  b.innerHTML=list.map(x=>`<div class="listrow"><div><div style="font-weight:500">${esc(x.file)}</div><div class="meta num">${esc(x.when)} · ${x.size} MB</div></div>
+    <button class="btn sm" onclick="askRestore('${attr(x.file)}')">restore</button></div>`).join('');}
+async function doBackup(){const btn=el('bkNow');if(btn){btn.textContent='Backing up…';btn.disabled=true;}const r=await api('/api/server/backup','POST',{name:ACTIVE});toast(r.msg);if(btn){btn.textContent='Back up now';btn.disabled=false;}loadBackups();}
+
+/* actions */
+async function toggleServer(){const cur=STATE.servers.find(s=>s.name===ACTIVE);const a=(cur&&cur.running)?'stop':'start';const r=await api('/api/server/'+a,'POST',{name:ACTIVE});toast(r.msg);tick();}
+async function tun(a){const r=await api('/api/tunnel/'+a,'POST',{name:ACTIVE});toast(r.msg);tick();}
+async function setActive(n){ACTIVE=n;await api('/api/server/setactive','POST',{name:n});tick();render();}
+async function convertPaper(n){openHold('Convert to Paper?',`This swaps ${n} to Paper (keeps your world, backs up the vanilla jar).`,'Hold to convert',async()=>{toast('Converting…');const r=await api('/api/server/convert','POST',{name:n});toast(r.msg);tick();if(CUR==='mods')loadMods();});}
+function copyAddr(){const cur=STATE.servers.find(s=>s.name===ACTIVE);const a=(cur&&cur.address)||'localhost';navigator.clipboard.writeText(a);
+  const p=el('addrPill'),ic=el('addrIco'),n=el('addrNote');p.classList.add('copied');ic.innerHTML=checkIco;ic.style.color='var(--success)';
+  n._lock=true;n.innerHTML='<span style="color:var(--success)">Copied for your friends ✓</span>';
+  setTimeout(()=>{p.classList.remove('copied');ic.innerHTML=copyIco;ic.style.color='';n._lock=false;n.innerHTML='Tap to copy — hand this to your friends.';},1600);}
+
+/* create modal */
+function openCreate(){api('/api/versions').then(v=>{
+  const bk=(STATE&&STATE.bank)||{total:0,free:0};
+  el('scrim').innerHTML=`<div class="sheet"><h3>New world</h3>
+    <p>Spin up a fresh server for a friend group.${bk.total?` 🎟️ It'll auto-grab a free tunnel from your bank (<b style="color:var(--ember)">${bk.free} of ${bk.total} free</b>).`:` <span class="muted">No tunnel bank yet — it'll be LAN-only until you add an address.</span>`}</p>
+    <div style="display:grid;gap:12px">
+      <label>Name<input id="cName" placeholder="MyCozyWorld" style="width:100%;margin-top:5px"/></label>
+      <label>Version<select id="cVer" style="width:100%;margin-top:5px">${(v.versions||[]).map(x=>`<option>${x}</option>`).join('')}</select></label>
+      <label>Type<select id="cType" style="width:100%;margin-top:5px"><option value="vanilla">Vanilla</option><option value="paper">Paper (plugins)</option></select></label>
+      <label>Seed <span class="muted">(optional)</span><input id="cSeed" placeholder="leave blank for a random world" style="width:100%;margin-top:5px"/></label>
+    </div>
+    <div class="row" style="justify-content:flex-end;margin-top:20px"><button class="btn ghost" onclick="closeScrim()">Cancel</button>
+      <button class="primary" style="font-size:13px;padding:10px 20px" id="cGo" onclick="doCreate()">Create</button></div></div>`;
+  el('scrim').classList.add('show');});}
+async function doCreate(){const name=el('cName').value.trim();if(!name){toast('Give it a name.');return;}const version=el('cVer').value,stype=el('cType').value,seed=(el('cSeed')||{}).value||'';
+  const g=el('cGo');g.textContent='Creating…';g.disabled=true;const r=await api('/api/server/create','POST',{name,version,stype,seed});toast(r.msg);
+  if(r.ok){closeScrim();ACTIVE=name;tick();go('worlds');}else{g.textContent='Create';g.disabled=false;}}
+function closeScrim(){el('scrim').classList.remove('show');el('scrim').innerHTML='';}
+
+/* hold-to-confirm */
+function openHold(title,body,label,fn){
+  el('scrim').innerHTML=`<div class="sheet"><h3>${title}</h3><p>${body}</p>
+    <div class="hold" id="holdBtn"><div class="fill" id="holdFill"></div><span>${label}</span></div>
+    <div class="row" style="justify-content:center;margin-top:14px"><button class="btn ghost" onclick="closeScrim()">Cancel</button></div></div>`;
+  el('scrim').classList.add('show');
+  const btn=el('holdBtn'),fill=el('holdFill');let timer,start;
+  const begin=()=>{start=Date.now();fill.style.transition='width 700ms linear';fill.style.width='100%';timer=setTimeout(()=>{closeScrim();fn();},700);};
+  const cancel=()=>{clearTimeout(timer);fill.style.transition='width 120ms';fill.style.width='0';};
+  btn.onpointerdown=begin;btn.onpointerup=cancel;btn.onpointerleave=cancel;
+}
+function askRestore(f){openHold('Restore this backup?',`Replaces the current world with <b>${esc(f)}</b>. Your current world is parked aside first, and the server must be asleep.`,'Hold to restore',async()=>{toast('Restoring…');const r=await api('/api/server/restore','POST',{name:ACTIVE,file:f});toast(r.msg);tick();});}
+function askDelete(n){openHold('Delete this world?',`Removes <b>${esc(n)}</b> from the panel. The files stay on disk.`,'Hold to delete',async()=>{const r=await api('/api/server/delete','POST',{name:n});toast(r.msg);if(ACTIVE===n)ACTIVE=null;tick();render();});}
+
+/* command palette */
+let palItems=[],palSel=0;
+function openPalette(){
+  const items=[
+    {t:(STATE&&STATE.servers.find(s=>s.name===ACTIVE)?.running)?'Stop the server':'Start the server',k:'',fn:toggleServer},
+    {t:'Copy connect address',k:'',fn:()=>{go('home');setTimeout(copyAddr,50);}},
+    ...TABS.map(([k,l])=>({t:'Go to '+l,k:'',fn:()=>go(k)})),
+    ...STATE.servers.map(s=>({t:'Switch to world: '+s.name,k:'',fn:()=>setActive(s.name)})),
+    {t:'Back up now',k:'',fn:()=>{go('backups');setTimeout(doBackup,80);}},
+  ];
+  palItems=items;palSel=0;
+  el('paletteScrim').innerHTML=`<div class="palette"><input id="palIn" placeholder="Type a command…" autocomplete="off" oninput="palFilter(this.value)" onkeydown="palKey(event)"/><div class="pitems" id="palList"></div></div>`;
+  el('paletteScrim').classList.add('show');palRender(items);el('palIn').focus();
+}
+function palFilter(q){q=q.toLowerCase();const f=palItems.filter(i=>i.t.toLowerCase().includes(q));palSel=0;palRender(f);el('paletteScrim')._f=f;}
+function palRender(list){el('paletteScrim')._f=list;el('palList').innerHTML=list.map((i,n)=>`<div class="pitem ${n===palSel?'sel':''}" onclick="palRun(${n})"><span>${esc(i.t)}</span><span class="k">${i.k||''}</span></div>`).join('')||'<div class="pitem" style="color:var(--muted)">no matches</div>';}
+function palKey(e){const f=el('paletteScrim')._f||[];if(e.key==='ArrowDown'){palSel=Math.min(f.length-1,palSel+1);palRender(f);e.preventDefault();}
+  else if(e.key==='ArrowUp'){palSel=Math.max(0,palSel-1);palRender(f);e.preventDefault();}
+  else if(e.key==='Enter'){palRun(palSel);}else if(e.key==='Escape')closePalette();}
+function palRun(n){const f=el('paletteScrim')._f||[];const it=f[n];closePalette();if(it)it.fn();}
+function closePalette(){el('paletteScrim').classList.remove('show');el('paletteScrim').innerHTML='';}
+
+function quitPanel(){openHold('Put the panel to bed?','The web panel closes. Any running server keeps running.','Hold to close',()=>api('/api/quit','POST',{}).then(()=>document.body.innerHTML='<div style="display:grid;place-items:center;height:100vh;color:var(--muted)">🔥 the lamp is out — you can close this tab.</div>'));}
+
+/* global keys */
+document.addEventListener('keydown',e=>{
+  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();el('paletteScrim').classList.contains('show')?closePalette():openPalette();}
+  if(e.key==='Escape'){closeScrim();closePalette();}
+});
+el('scrim').addEventListener('click',e=>{if(e.target===el('scrim'))closeScrim();});
+el('paletteScrim').addEventListener('click',e=>{if(e.target===el('paletteScrim'))closePalette();});
+document.addEventListener('click',e=>{const sw=el('switcher'),b=el('wmBtn');if(sw&&sw.classList.contains('show')&&!sw.contains(e.target)&&b&&!b.contains(e.target))closeSwitcher();});
+
+/* boot */
+buildNav();go('home');tick();
+setInterval(tick,2500);
+setInterval(()=>{if(CUR==='home'){pollLog().then(()=>{renderPeek();renderPresence();});}if(CUR==='console'){pollLog().then(renderFullLog);}},1500);
+</script>
+</body>
+</html>
