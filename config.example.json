@@ -1,0 +1,31 @@
+{
+  "_comment": "Copy to config.json to start from this instead of the empty default. The panel writes config.json itself on first run, so you usually don't need this file at all. Stop the panel before editing config.json. Use double backslashes in Windows paths.",
+
+  "serversRoot": "C:\\Users\\YOU\\MinecraftServers",
+
+  "servers": [
+    {
+      "name": "MyWorld",
+      "path": "C:\\Users\\YOU\\MinecraftServers\\MyWorld",
+      "type": "vanilla",
+      "version": "1.21.4",
+      "group": "College friends",
+      "tunnel": {
+        "exe": "C:\\Users\\YOU\\playit\\playit.exe",
+        "secret": "PUT-YOUR-PLAYIT-AGENT-SECRET-HERE",
+        "address": "your-tunnel.gl.joinmc.link"
+      }
+    }
+  ],
+
+  "active": "MyWorld",
+
+  "memory": { "min": "2G", "max": "4G" },
+
+  "protected": ["MyWorld"],
+
+  "bank": [
+    { "port": 25565, "address": "world-one.gl.joinmc.link" },
+    { "port": 25566, "address": "world-two.gl.joinmc.link" }
+  ]
+}
