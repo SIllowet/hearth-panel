@@ -1,6 +1,12 @@
 # Holds your playit agent secret and local server paths — never commit this.
 config.json
 
+# Holds your AI provider API key — never commit this either.
+ai_config.json
+
+# What the AI remembers about your server and your players.
+ai_memory.json
+
 # Runtime junk
 panel.log
 __pycache__/
