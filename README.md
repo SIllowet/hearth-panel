@@ -27,6 +27,7 @@ python app.py     →     http://127.0.0.1:8765
 - **Plugins / mods** — add by URL or local file path, remove with a click.
 - **World icons** — the little picture next to your server in the Minecraft multiplayer list. Any image, auto-resized to 64×64.
 - **Backups** — automatic on every stop and every 2 hours (keeps the last 15), plus "Back up now" and one-click restore.
+- **An AI that lives in your server** — optional. You name it, you pick its brain (a free local model or any paid API), and it talks to players in chat and runs commands for people you trust. [Details below.](#the-ai)
 - **Public address via playit.gg** — optional. Runs the tunnel agent for you so friends outside your network can join.
 - **A safety guard** — the panel refuses to start a world whose port is already in use. Two servers running on one world folder will overwrite each other's saves, and this stops that happening.
 
@@ -43,6 +44,7 @@ You need:
 | **Java** | Minecraft servers are Java programs. Match the version to your Minecraft version — modern versions need Java 21+, older ones need Java 17. [Microsoft OpenJDK](https://learn.microsoft.com/java/openjdk/download) works well. |
 | **Pillow** *(optional)* | Only needed for the world-icon feature: `pip install Pillow` |
 | **A playit.gg account** *(optional)* | Only if you want friends outside your home network to join. Free. |
+| **An AI provider** *(optional)* | Only for the AI companion. [Ollama](https://ollama.com) runs free on your own PC; any paid API works too. No Python packages needed either way. |
 
 The panel itself needs no other Python packages — everything else is the standard library.
 
@@ -157,6 +159,108 @@ tunnel to the pool.
 
 ---
 
+## The AI
+
+Optional. Off until you name it.
+
+Open the **AI** tab and give it a name — that name is what players say in chat to
+get its attention. It has no name of its own and this panel won't pick one for
+you; it's yours to name.
+
+Once named, it sits in the server console: it reads chat, joins in when someone
+says its name, and can run Minecraft commands for players you trust.
+
+```
+<Steve> ember can you make it daytime
+[Ember] Sure. Sun's up.
+        → time set day
+```
+
+After it answers, a **30-second window** stays open — nobody has to keep saying
+its name to carry on the conversation. When the window goes quiet it signs off
+and stops listening.
+
+### Picking a brain
+
+It is not tied to any one AI company. The **Brain** section has a dropdown:
+
+| Provider | Cost | Notes |
+|---|---|---|
+| **Ollama** | Free | Runs on your own PC. Install [Ollama](https://ollama.com), `ollama pull llama3.2`, done. Nothing leaves your computer. |
+| **Google Gemini** | Free tier | Key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey). |
+| **OpenAI** | Paid | Key from [platform.openai.com](https://platform.openai.com/api-keys). |
+| **Anthropic (Claude)** | Paid | Key from [console.anthropic.com](https://console.anthropic.com). |
+| **Anything OpenAI-compatible** | Depends | OpenRouter, Groq, DeepSeek, Mistral, Together, LM Studio, vLLM… paste the base URL (ending in `/v1`), the model id and your key. |
+
+Pick one, paste a key if it needs one, and hit **Test connection** — it asks the
+model to say hello and shows you exactly what came back. Switching providers
+later swaps in that provider's default model automatically, so you can move from
+a local model to a paid one (or back) without breaking anything.
+
+Bigger models follow instructions and Minecraft syntax noticeably better. A small
+local model works fine for chat and simple commands.
+
+### The toolbelt
+
+The AI cannot type whatever it likes into your console.
+
+Every command it's allowed to touch lives in `mc_tools.py` as a catalog — 65 of
+them, each with its real syntax, an example and a risk level. That catalog
+is handed to the model on every reply, so it picks a tool off a list instead of
+writing commands from memory. On the way back, anything that isn't on the list is
+thrown away before it reaches the server.
+
+That means a model that hallucinates `/fly` or invents a flag simply fails safely
+and says so, instead of spraying errors into your console.
+
+Every tool has a switch in the panel. Turn off `fill` and `clone` if you don't
+want it reshaping terrain; turn off everything and it's a chat companion.
+
+Some commands are **never** available, to anyone, including you:
+
+```
+stop  op  deop  ban  ban-ip  pardon  whitelist  save-off  reload  debug  jfr
+```
+
+Those either kill the server, hand out permanent power, or switch off the
+saving that protects your world. They aren't a setting you can toggle.
+
+That's the whole vanilla command set bar three — `return`, `publish` and `test`
+only work inside a datapack function, a singleplayer world, or the gametest
+harness, so a chat message can't reach them. Add them to `mc_tools.py` if you
+disagree; the panel reads whatever is in that list.
+
+### Who it listens to
+
+Chat is for everyone. **Commands are for people you trust.**
+
+Add players on the AI tab, or leave *"Ops are trusted"* on so everyone in
+`ops.json` counts automatically. Anyone else who asks for a command gets a polite
+no — the check happens in the panel, not in the model's judgement, so no amount
+of sweet-talking in chat gets around it.
+
+### Memory
+
+It keeps a small memory file, `ai_memory.json`, next to `app.py`:
+
+- **What you write** — a box on the AI tab. Server rules, who's who, where the
+  base is, what the server is for. It reads this before every reply.
+- **What it notices** — a few short notes per player, picked up from conversation.
+  You can see them all on the AI tab and forget any player with one click.
+
+It's plain JSON, so you can edit it by hand if you'd rather. Nothing is sent
+anywhere except to the provider you chose, as part of the reply it's working on.
+
+### Notes
+
+- It only works on worlds **started from this panel** — it needs the console pipe.
+  A world left running from a previous session has no AI attached until you
+  restart it here.
+- If you edit `ai.py`, restart the panel.
+- `ai_config.json` holds your API key and is in `.gitignore`. Keep it there.
+
+---
+
 ## config.json
 
 Created automatically on first run, next to `app.py`. Stop the panel before editing it.
@@ -223,6 +327,13 @@ beside the new one, so a wrong restore is always undoable.
   the panel can run any server command. Don't expose port 8765 to your network or
   the internet — it is not built to survive that.
 - The playit tunnel exposes your **Minecraft server**, not the panel.
+- **The AI has real console access.** It is gated two ways — the player has to be
+  on your trusted list, and the command has to be on the toolbelt — and the
+  destructive commands are blocked outright. But it is still a language model
+  running commands on your server, so keep the trusted list to people you'd hand
+  the console to anyway, and back your world up (the panel already does).
+- Your AI provider sees the chat it's replying to, the recent console lines and
+  your memory file. If that matters to you, run Ollama and nothing leaves the PC.
 - New worlds are created with `online-mode=true`, which means Minecraft verifies that
   players own the game. If you set it to `false`, anyone who knows your address can
   join under any name — and be aware that **flipping this setting on an existing world
@@ -263,7 +374,13 @@ from the panel to get the console back.
 app.py            the whole backend — HTTP server, process management,
                   backups, jar downloads, config. Standard library only.
 ui/index.html     the whole frontend — one file, no build step, no dependencies.
+ai.py             the console companion: chat, providers, trust, memory.
+                  Optional — delete it and the panel runs exactly as before.
+mc_tools.py       the toolbelt: every Minecraft command the AI may use, with
+                  syntax and risk level. Edit this to widen or narrow its reach.
 config.json       your servers and secrets. Created on first run. Never committed.
+ai_config.json    the AI's name, personality, provider and API key. Never committed.
+ai_memory.json    what the AI knows about your server and your players.
 ```
 
 Every world runs as a child process of the panel, with its stdin/stdout piped — which

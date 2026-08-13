@@ -4,6 +4,12 @@ import json, os, subprocess, threading, time, glob, shutil, urllib.request, hash
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+try:
+    from ai import AI                # the console companion (optional)
+except Exception as _e:              # the panel must still boot if it's broken
+    AI = None
+    print("AI module not loaded:", _e)
+
 BASE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE, 'config.json')
 UI_DIR = os.path.join(BASE, 'ui')
@@ -143,8 +149,27 @@ def start_server(name):
                                 text=True, bufsize=1, creationflags=NO_WINDOW)
     except Exception as e:
         return False, "Failed to start: " + str(e)
-    threading.Thread(target=_reader, args=(mp, mp.p.stdout), daemon=True).start()
+    watcher = attach_ai(name, mp)
+    threading.Thread(target=_reader, args=(mp, mp.p.stdout, watcher), daemon=True).start()
     return True, "Starting " + name + "..."
+
+def attach_ai(name, mp):
+    """Hand the companion this world's console: it reads every line, and talks and
+    runs commands back through the same stdin pipe the panel uses. Only works for
+    worlds started from the panel — an orphaned world has no pipe to attach to."""
+    if not AI:
+        return None
+    try:
+        AI.attach(
+            name,
+            lambda cmd: send_command(name, cmd),
+            lambda line: mp.log.append(line),
+            lambda: online_players(name),
+        )
+        return lambda line: AI.on_console_line(name, line)
+    except Exception as e:
+        print("AI attach failed:", e)
+        return None
 
 def send_command(name, cmd):
     mp = proc_for(name)
@@ -779,6 +804,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"list": list_backups(q.get('name', ''))}); return
         if path == '/api/bank':
             self._send(200, bank_status()); return
+        if path == '/api/ai':
+            if not AI:
+                self._send(200, {"loaded": False, "msg": "ai.py failed to load."}); return
+            st = AI.panel_status(q.get('name') or CONFIG.get('active'))
+            st["loaded"] = True
+            self._send(200, st); return
         if path == '/api/icon':
             s = get_server(q.get('name', ''))
             ic = os.path.join(s['path'], 'server-icon.png') if s else ''
@@ -811,6 +842,22 @@ class Handler(BaseHTTPRequestHandler):
             '/api/mods/add':       lambda: add_mod(name, b.get('url', '')),
             '/api/mods/remove':    lambda: remove_mod(name, b.get('file', '')),
         }
+        if path.startswith('/api/ai/'):
+            if not AI:
+                self._send(200, {"ok": False, "msg": "The AI module isn't loaded."}); return
+            if path == '/api/ai/config':
+                ok, msg = AI.update_config(b.get('patch') or {})
+            elif path == '/api/ai/memory':
+                ok, msg = AI.update_memory(b.get('about'), b.get('facts'), b.get('forget'))
+            elif path == '/api/ai/test':
+                ok, msg = AI.test_connection()
+            elif path == '/api/ai/say':
+                ok, msg = AI.test_message(name or CONFIG.get('active'),
+                                          b.get('player') or AI.cfg.get('owner_ign') or 'owner',
+                                          b.get('text', ''))
+            else:
+                self._send(404, {"ok": False, "msg": "unknown endpoint"}); return
+            self._send(200, {"ok": ok, "msg": msg}); return
         if path == '/api/server/setactive':
             CONFIG['active'] = name; save_config(CONFIG)
             self._send(200, {"ok": True, "msg": "Active server: " + name}); return
