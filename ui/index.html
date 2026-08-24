@@ -275,6 +275,30 @@
     *,*::before,*::after{animation:none!important;transition-duration:80ms!important}
     .hero .glow{opacity:calc(var(--ember-on)*.4)}
   }
+
+  /* mod catalogue + version tab */
+/* mod catalogue */
+  .mrow{display:flex;gap:14px;align-items:flex-start;padding:14px 16px;background:var(--surface);
+    border:1px solid var(--border);border-radius:var(--r-ctrl);margin-bottom:10px;
+    box-shadow:inset 0 1px 0 var(--topHi);transition:border-color var(--t-fast)}
+.mrow:hover{border-color:var(--borderWarm)}
+.mrow .thumb{width:46px;height:46px;flex:none;border-radius:9px;border:1px solid var(--border);
+    object-fit:cover;background:var(--surface2)}
+.mrow .thumb.ph{display:grid;place-items:center;color:var(--muted);font-size:17px}
+.mrow .body{flex:1;min-width:0}
+.mrow .tt{font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.mrow .sm{font-size:12px;color:var(--muted);margin-top:3px;overflow:hidden;display:-webkit-box;
+    -webkit-line-clamp:2;-webkit-box-orient:vertical}
+.mrow .dl{font-size:11px;color:var(--muted);margin-top:5px;display:flex;gap:10px;flex-wrap:wrap}
+.mrow .acts{display:flex;flex-direction:column;gap:6px;flex:none}
+.tag.warm{color:var(--ember);border-color:var(--borderWarm)}
+.tag.good{color:var(--success);border-color:#4a5c38}
+.tag.bad{color:var(--danger)}
+.note{background:var(--surface2);border:1px solid var(--border);border-left:2px solid var(--ember);
+    border-radius:var(--r-ctrl);padding:12px 14px;font-size:12px;color:var(--textDim);line-height:1.6}
+.note.warn{border-left-color:var(--danger)}
+.bigver{font-size:30px;font-weight:600;letter-spacing:.3px;line-height:1.1}
+.scrollbox{max-height:340px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--r-ctrl)}
 </style>
 </head>
 <body>
@@ -309,6 +333,7 @@ const ICON={
   worlds:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 2.5 15 0 18M12 3c-2.5 2.5-2.5 15 0 18"/>',
   settings:'<circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.3l2-1.5-2-3.4-2.3 1a7 7 0 0 0-2.3-1.3L13.8 2h-3.6l-.5 2.5A7 7 0 0 0 7.4 5.8l-2.3-1-2 3.4 2 1.5a7 7 0 0 0 0 2.6l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 2.3 1.3l.5 2.5h3.6l.5-2.5a7 7 0 0 0 2.3-1.3l2.3 1 2-3.4-2-1.5c.07-.43.1-.86.1-1.3Z"/>',
   mods:'<path d="M10 3H5a2 2 0 0 0-2 2v5h3a2 2 0 1 1 0 4H3v5a2 2 0 0 0 2 2h5v-3a2 2 0 1 1 4 0v3h5a2 2 0 0 0 2-2v-5h-3a2 2 0 1 1 0-4h3V5a2 2 0 0 0-2-2h-5v3a2 2 0 1 1-4 0Z"/>',
+  version:'<circle cx="12" cy="12" r="9"/><path d="M12 16V8m0 0-3.2 3.2M12 8l3.2 3.2"/>',
   console:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/>',
   backups:'<path d="M3 7l1.5 12.5a2 2 0 0 0 2 1.5h11a2 2 0 0 0 2-1.5L21 7"/><rect x="2" y="3" width="20" height="4" rx="1"/><path d="M10 11h4"/>',
   ai:'<rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 7V4"/><circle cx="9" cy="13" r="1.2"/><circle cx="15" cy="13" r="1.2"/><path d="M2 12v3M22 12v3"/>',
@@ -318,10 +343,11 @@ const copyIco='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" strok
 const checkIco='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4 10-11"/></svg>';
 
 /* ---------------- state ---------------- */
-const TABS=[['home','Home'],['worlds','Worlds'],['settings','Settings'],['mods','Mods'],['console','Console'],['ai','AI'],['backups','Backups']];
+const TABS=[['home','Home'],['worlds','Worlds'],['settings','Settings'],['mods','Mods'],['version','Version'],['console','Console'],['ai','AI'],['backups','Backups']];
 let STATE=null, ACTIVE=null, CUR='home', PROPS={}, DIRTY={}, LOG=[], lastNewIdx=-1;
 let EMPTY=null;   // null until the first poll — so we always paint once we know
 let cmdHist=[], cmdIdx=-1;
+let MODTAB='installed', MSRC='modrinth', MQ='', MPAGE=0, MRES=null, MINFO=null, VINFO=null;
 
 async function api(p,m='GET',b){const o={method:m,headers:{'Content-Type':'application/json'}};if(b)o.body=JSON.stringify(b);return (await fetch(p,o)).json();}
 function el(id){return document.getElementById(id);}
@@ -412,7 +438,8 @@ function render(){const c=el('col');c.style.animation='none';void c.offsetWidth;
   if(CUR==='home')c.innerHTML=viewHome();
   else if(CUR==='worlds')c.innerHTML=viewWorlds();
   else if(CUR==='settings'){c.innerHTML=viewSettingsShell();loadSettings();}
-  else if(CUR==='mods'){c.innerHTML=viewModsShell();loadMods();}
+  else if(CUR==='mods'){c.innerHTML=viewModsShell();loadModPage();}
+  else if(CUR==='version'){c.innerHTML=viewVersionShell();loadVersion();}
   else if(CUR==='console')c.innerHTML=viewConsole();
   else if(CUR==='ai'){c.innerHTML=viewAIShell();loadAI();}
   else if(CUR==='backups'){c.innerHTML=viewBackupsShell();loadBackups();}
@@ -637,17 +664,261 @@ function motdHtml(s){if(!s)return '<span style="color:var(--muted)">(empty)</spa
 async function saveSettings(){if(!Object.keys(DIRTY).length){el('saveNote').textContent='nothing changed';setTimeout(()=>el('saveNote').textContent='',1500);return;}
   const r=await api('/api/properties/save','POST',{name:ACTIVE,props:DIRTY});if(r.ok){Object.assign(PROPS,DIRTY);DIRTY={};el('saveNote').textContent='✓ saved';setTimeout(()=>{const n=el('saveNote');if(n)n.textContent='';},2200);}else toast(r.msg);}
 
-/* MODS */
-function viewModsShell(){return `<h1 class="page-h">Mods &amp; Plugins</h1><p class="page-sub">For <b>${esc(ACTIVE||'')}</b></p><div id="modBody"><div class="emptyfire">Loading…</div></div>`;}
-async function loadMods(){const r=await api('/api/mods?name='+encodeURIComponent(ACTIVE));const b=el('modBody');if(!b)return;
-  if(!r.supported){b.innerHTML=`<div class="card paper"><div class="emptyfire" style="margin-bottom:14px">${esc(r.note||'')}</div>
-    <button class="btn" onclick="convertPaper('${attr(ACTIVE)}')">→ Convert this world to Paper</button></div>`;return;}
-  b.innerHTML=`<div class="card paper"><div class="row" style="margin-bottom:6px">
-      <input id="modUrl" placeholder="paste a plugin URL or file path" style="flex:1"/><button class="btn" onclick="addMod()">＋ Add</button></div>
-      <div class="meta" style="font-size:12px;color:var(--muted)">${r.items.length} ${esc(r.kind)}(s) installed · restart to apply</div></div>
-    ${r.items.length?r.items.map(f=>`<div class="listrow"><div>${esc(f)}</div><button class="btn sm" style="color:var(--danger)" onclick="rmMod('${attr(f)}')">remove</button></div>`).join(''):'<div class="emptyfire">No plugins yet — the world runs vanilla.</div>'}`;}
-async function addMod(){const u=el('modUrl').value.trim();if(!u){toast('Paste a URL or file path.');return;}toast('Adding…');const r=await api('/api/mods/add','POST',{name:ACTIVE,url:u});toast(r.msg);loadMods();}
-async function rmMod(f){const r=await api('/api/mods/remove','POST',{name:ACTIVE,file:f});toast(r.msg);loadMods();}
+/* MODS — installed list + live CurseForge/Modrinth browser */
+const KB=n=>n>=1048576?(n/1048576).toFixed(1)+' MB':Math.max(1,Math.round(n/1024))+' KB';
+const NUM=n=>n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?Math.round(n/1e3)+'k':String(n||0);
+const SRCNAME={modrinth:'Modrinth',curseforge:'CurseForge'};
+
+function viewModsShell(){
+  return `<h1 class="page-h">Mods &amp; Plugins</h1>
+  <p class="page-sub">For <b>${esc(ACTIVE||'')}</b> <span id="modWhat"></span></p>
+  <div class="seg" style="margin-bottom:16px">
+    <button class="${MODTAB==='installed'?'on':''}" onclick="modTab('installed')">Installed</button>
+    <button class="${MODTAB==='browse'?'on':''}" onclick="modTab('browse')">Browse catalogue</button>
+  </div>
+  <div id="modBody"><div class="emptyfire">Loading…</div></div>`;
+}
+function modTab(t){MODTAB=t;render();}
+async function loadModPage(){
+  MINFO=await api('/api/mods?name='+encodeURIComponent(ACTIVE));
+  const w=el('modWhat');
+  if(w&&MINFO)w.innerHTML=`· ${esc(({vanilla:'Vanilla',paper:'Paper',fabric:'Fabric'})[MINFO.type]||MINFO.type)} · Minecraft ${esc(MINFO.version||'?')}`;
+  if(MINFO&&!MINFO.supported){renderNoLoader();return;}
+  if(MODTAB==='browse')renderBrowse();else renderInstalled();
+}
+function renderNoLoader(){
+  const b=el('modBody');if(!b)return;
+  b.innerHTML=`<div class="card paper"><div class="note" style="margin-bottom:16px">${esc(MINFO.note||'')}</div>
+    <div class="row"><button class="btn" style="border-color:var(--borderWarm);color:var(--ember)" onclick="go('version')">→ Open the Version tab</button></div></div>`;
+}
+
+/* ---- installed ---- */
+function renderInstalled(){
+  const b=el('modBody');if(!b)return;const r=MINFO;
+  b.innerHTML=`<div class="card paper">
+    <div class="between"><div class="eyebrow">${r.items.length} ${esc(r.kind)}${r.items.length===1?'':'s'} installed</div>
+      <button class="btn sm" onclick="modTab('browse')">＋ Browse catalogue</button></div>
+    <div class="hint-row">Changes take effect when the world next starts.</div>
+    <div style="height:16px"></div>
+    <div class="row">
+      <label class="btn sm" style="cursor:pointer">Install from file…<input type="file" accept=".jar" style="display:none" onchange="uploadMod(this)"/></label>
+      <input id="modUrl" placeholder="…or paste a direct .jar link" style="flex:1;min-width:180px"/>
+      <button class="btn sm" onclick="addMod()">Add link</button>
+    </div>
+  </div>
+  ${r.items.length?r.items.map(f=>`<div class="listrow">
+      <div style="min-width:0"><div style="overflow:hidden;text-overflow:ellipsis">${esc(f.file)}</div>
+        <div class="meta">${KB(f.size)}</div></div>
+      <button class="btn sm" style="color:var(--danger)" onclick="rmMod('${attr(f.file)}')">remove</button>
+    </div>`).join('')
+   :`<div class="emptyfire">Nothing installed yet — hit <b>Browse catalogue</b> and pick something.</div>`}`;
+}
+async function addMod(){const i=el('modUrl');const u=(i&&i.value||'').trim();if(!u){toast('Paste a .jar link first.');return;}
+  toast('Downloading…');const r=await api('/api/mods/add','POST',{name:ACTIVE,url:u});toast(r.msg);loadModPage();}
+async function rmMod(f){const r=await api('/api/mods/remove','POST',{name:ACTIVE,file:f});toast(r.msg);loadModPage();}
+function uploadMod(input){const f=input.files&&input.files[0];if(!f)return;
+  toast('Installing '+f.name+'…');
+  const rd=new FileReader();
+  rd.onload=async()=>{const r=await api('/api/mods/upload','POST',{name:ACTIVE,filename:f.name,data:rd.result});
+    toast(r.msg);input.value='';loadModPage();};
+  rd.readAsDataURL(f);}
+
+/* ---- browse ---- */
+function renderBrowse(){
+  const b=el('modBody');if(!b)return;
+  const kind=MINFO.kind==='plugin'?'plugins':'mods';
+  b.innerHTML=`<div class="card paper">
+    <div class="row">
+      <div class="seg">
+        <button class="${MSRC==='curseforge'?'on':''}" onclick="modSrc('curseforge')">CurseForge</button>
+        <button class="${MSRC==='modrinth'?'on':''}" onclick="modSrc('modrinth')">Modrinth</button>
+      </div>
+      <input id="mq" placeholder="search ${kind} — e.g. voice chat, minimap, veinminer" style="flex:1;min-width:200px"
+        value="${attr(MQ)}" onkeydown="if(event.key==='Enter')doSearch()"/>
+      <button class="btn" onclick="doSearch()">Search</button>
+    </div>
+    <div class="hint-row">Only showing ${kind} that run on <b>${esc(MINFO.type==='paper'?'Paper':'Fabric')} · Minecraft ${esc(MINFO.version||'?')}</b> — so nothing you install here can be the wrong version.
+      · <a href="#" onclick="cfKeySheet();return false">${MINFO.hasKey?'CurseForge key ✓':'Add CurseForge key'}</a></div>
+  </div>
+  <div id="mres"><div class="emptyfire">Loading…</div></div>`;
+  runSearch();
+}
+function modSrc(s){MSRC=s;MPAGE=0;render();}
+function doSearch(){const i=el('mq');MQ=i?i.value.trim():'';MPAGE=0;runSearch();}
+function modPage(d){MPAGE=Math.max(0,MPAGE+d);runSearch();}
+async function runSearch(){
+  const box=el('mres');if(!box)return;
+  box.innerHTML='<div class="emptyfire">Searching '+esc(SRCNAME[MSRC])+'…</div>';
+  const r=await api(`/api/mods/browse?name=${encodeURIComponent(ACTIVE)}&source=${MSRC}&q=${encodeURIComponent(MQ)}&page=${MPAGE}`);
+  MRES=r;
+  if(el('mres')!==box)return;                       // user navigated away mid-flight
+  if(!r.ok){
+    box.innerHTML=`<div class="card paper"><div class="note ${r.needKey?'':'warn'}">${esc(r.note||'That search did not work.')}</div>
+      ${r.needKey?`<div class="row" style="margin-top:14px"><button class="btn" onclick="cfKeySheet()">Add a CurseForge key</button>
+        <button class="btn" onclick="modSrc('modrinth')">Use Modrinth instead</button></div>`:''}</div>`;
+    return;
+  }
+  if(!r.items.length){box.innerHTML=`<div class="emptyfire">Nothing on ${esc(SRCNAME[MSRC])} matches that for Minecraft ${esc(r.version||'')}.</div>`;return;}
+  box.innerHTML=r.items.map(mrow).join('')+pager(r);
+}
+function pager(r){
+  const shown=(r.page*20)+r.items.length;
+  return `<div class="row" style="justify-content:space-between;margin-top:8px">
+    <span class="muted" style="font-size:12px;color:var(--muted)">${shown} of ${NUM(r.total)} on ${esc(SRCNAME[r.source])}</span>
+    <span class="row">
+      <button class="btn sm" ${r.page?'':'disabled style="opacity:.4"'} onclick="modPage(-1)">← back</button>
+      <button class="btn sm" ${shown<r.total?'':'disabled style="opacity:.4"'} onclick="modPage(1)">more →</button>
+    </span></div>`;
+}
+function mrow(m){
+  const pid=attr(String(m.id)), src=attr(m.source);
+  const siteOnly=m.openOnly;
+  return `<div class="mrow">
+    ${m.icon?`<img class="thumb" src="${attr(m.icon)}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'thumb ph',textContent:'▩'}))"/>`
+            :`<div class="thumb ph">▩</div>`}
+    <div class="body">
+      <div class="tt">${esc(m.name)}
+        ${siteOnly?'<span class="tag bad" title="This author only allows downloads from the CurseForge website">site-only</span>':''}</div>
+      <div class="sm">${esc(m.summary||'')}</div>
+      <div class="dl"><span>⬇ ${NUM(m.downloads)}</span>${m.author?`<span>by ${esc(m.author)}</span>`:''}${m.updated?`<span>updated ${esc(m.updated)}</span>`:''}
+        ${m.url?`<a href="${attr(m.url)}" target="_blank" rel="noreferrer">open page ↗</a>`:''}</div>
+    </div>
+    <div class="acts">
+      ${siteOnly?`<button class="btn sm" onclick="window.open('${attr(m.url)}','_blank')">Open page</button>`
+                :`<button class="btn sm" style="border-color:var(--borderWarm);color:var(--ember)" onclick="installMod('${src}','${pid}',this)">Install</button>`}
+      <button class="btn sm" onclick="buildSheet('${src}','${pid}','${attr(m.name)}')">Builds…</button>
+    </div></div>`;
+}
+async function installMod(source,project,btn,fileId){
+  if(btn){btn.disabled=true;btn.textContent='…';}
+  toast('Installing…');
+  const r=await api('/api/mods/install','POST',{name:ACTIVE,source,project,file:fileId||null,deps:true});
+  toast(r.msg);
+  if(btn){btn.disabled=false;btn.textContent=r.ok?'✓ Installed':'Install';}
+  if(r.ok)MINFO=await api('/api/mods?name='+encodeURIComponent(ACTIVE));
+}
+async function buildSheet(source,project,title){
+  el('scrim').innerHTML=`<div class="sheet" style="width:560px"><h3>${esc(title)}</h3>
+    <p>Every build this ${esc(MINFO.kind||'mod')} has. The ones that fit <b>Minecraft ${esc(MINFO.version||'')}</b> are listed first.</p>
+    <div class="emptyfire" id="bLoad">Loading builds…</div></div>`;
+  el('scrim').classList.add('show');
+  const r=await api(`/api/mods/files?name=${encodeURIComponent(ACTIVE)}&source=${source}&project=${encodeURIComponent(project)}`);
+  const l=el('bLoad');if(!l)return;
+  if(!r.ok||!r.items.length){l.innerHTML=esc(r.note||'No builds listed.');return;}
+  l.outerHTML=`<div class="scrollbox">${r.items.map(f=>`
+    <div class="buildrow ${f.fits?'':'off'}">
+      <div style="min-width:0">
+        <div style="overflow:hidden;text-overflow:ellipsis">${esc(f.name)}
+          ${f.channel!=='release'?`<span class="tag">${esc(f.channel)}</span>`:''}
+          ${f.fits?'<span class="tag good">fits</span>':''}</div>
+        <div class="meta" style="font-size:11px;color:var(--muted)">MC ${esc((f.gameVersions||[]).slice(0,3).join(', ')||'?')} · ${esc(f.date||'')}${f.size?' · '+KB(f.size):''}</div>
+      </div>
+      ${f.blocked?'<span class="tag bad">site-only</span>'
+        :`<button class="btn sm" onclick="installMod('${attr(f.source)}','${attr(String(project))}',this,'${attr(String(f.id))}')">Install</button>`}
+    </div>`).join('')}</div>
+    <div class="row" style="justify-content:flex-end;margin-top:16px"><button class="btn ghost" onclick="closeScrim()">Done</button></div>`;
+}
+function cfKeySheet(){
+  el('scrim').innerHTML=`<div class="sheet" style="width:520px"><h3>CurseForge API key</h3>
+    <p>CurseForge only lets apps read its catalogue with a key. It's free and takes a minute.</p>
+    <div class="note" style="margin-bottom:16px">
+      1. Open <a href="https://console.curseforge.com/" target="_blank" rel="noreferrer">console.curseforge.com</a> and sign in.<br/>
+      2. Go to <b>API Keys</b> and copy the key it shows you.<br/>
+      3. Paste it below. It's stored only on this PC, in the panel's config.
+    </div>
+    <input id="cfk" placeholder="paste the key here" style="width:100%" autocomplete="off"/>
+    <div class="hint-row">Modrinth needs no key and is already working — this only unlocks the CurseForge side.</div>
+    <div class="row" style="justify-content:space-between;margin-top:18px">
+      ${MINFO&&MINFO.hasKey?`<button class="btn sm" style="color:var(--danger)" onclick="saveCfKey('')">Remove key</button>`:'<span></span>'}
+      <span class="row"><button class="btn ghost" onclick="closeScrim()">Cancel</button>
+      <button class="primary" style="font-size:13px;padding:10px 20px" onclick="saveCfKey()">Save &amp; test</button></span></div></div>`;
+  el('scrim').classList.add('show');
+  setTimeout(()=>{const i=el('cfk');if(i)i.focus();},60);}
+async function saveCfKey(force){
+  const key=force!==undefined?force:(el('cfk')?el('cfk').value.trim():'');
+  toast('Checking…');
+  const r=await api('/api/mods/key','POST',{key});
+  toast(r.msg);
+  if(r.ok){closeScrim();MINFO=await api('/api/mods?name='+encodeURIComponent(ACTIVE));if(key)MSRC='curseforge';render();}}
+
+/* VERSION — Minecraft version + which loader the world runs */
+function viewVersionShell(){return `<h1 class="page-h">Minecraft version</h1>
+  <p class="page-sub">For <b>${esc(ACTIVE||'')}</b></p>
+  <div id="verBody"><div class="emptyfire">Checking what's available…</div></div>`;}
+
+async function loadVersion(){
+  VINFO=await api('/api/version?name='+encodeURIComponent(ACTIVE));
+  const b=el('verBody');if(!b)return;
+  const v=VINFO;
+  if(!v.ok){b.innerHTML=`<div class="card paper"><div class="note warn">${esc(v.note||'Could not read this world.')}</div></div>`;return;}
+  const opts=v.versions.map(x=>`<option value="${attr(x)}" ${x===v.latest?'selected':''}>${esc(x)}${x===v.latest?' — newest':''}${x===v.current?' — current':''}</option>`).join('');
+  const javaBad=v.javaHave&&v.javaNeedLatest&&v.javaHave<v.javaNeedLatest;
+  b.innerHTML=`
+  <div class="card paper">
+    <div class="between">
+      <div><div class="eyebrow">Running now</div><div class="bigver">${esc(v.current||'?')}</div>
+        <div class="meta" style="font-size:12px;color:var(--muted);margin-top:4px">${esc(v.typeLabel)}${v.mods?` · ${v.mods} ${esc(v.modKind)}${v.mods===1?'':'s'}`:''}</div></div>
+      <div style="text-align:right">
+        ${v.behind?`<span class="tag warm">${esc(v.latest)} is out</span>`:`<span class="tag good">up to date</span>`}
+        <div class="meta" style="font-size:12px;color:var(--muted);margin-top:6px">Java ${v.javaHave||'?'} installed</div></div>
+    </div>
+    ${v.error?`<div class="note warn" style="margin-top:16px">Couldn't reach Mojang's version list: ${esc(v.error)}</div>`:''}
+    <div style="height:20px"></div>
+    <div class="row">
+      <select id="verPick" style="min-width:200px">${opts}</select>
+      <button class="btn" style="border-color:var(--borderWarm);color:var(--ember)" onclick="askUpdate()" ${v.running?'disabled style="opacity:.4"':''}>Update this world</button>
+      ${v.hasPrev?`<button class="btn" onclick="askRollback()" ${v.running?'disabled style="opacity:.4"':''}>↩ Roll back${v.prev?' to '+esc(v.prev):''}</button>`:''}
+    </div>
+    ${v.running?`<div class="hint-row">This world is awake — send it to sleep first (Home → Let it rest).</div>`:''}
+    ${javaBad?`<div class="note warn" style="margin-top:16px">Minecraft ${esc(v.latest)} needs <b>Java ${v.javaNeedLatest}</b> but this PC has Java ${v.javaHave}. Install Microsoft OpenJDK ${v.javaNeedLatest} first, or the updated server won't boot.</div>`:''}
+    <div class="note warn" style="margin-top:16px"><b>Everyone has to match.</b> After an update, each friend must switch their own Minecraft launcher to the same version — on an older client they can't join at all. Tell them before you press it. Your world is zipped into <b>Backups</b> first, and Roll back puts the old jar straight back.</div>
+  </div>
+
+  <div class="card paper">
+    <div class="eyebrow">What this world runs</div>
+    <div style="height:6px"></div>
+    <p style="color:var(--muted);font-size:13px;margin:0 0 16px">Switching keeps your world and settings — it only swaps the server program.</p>
+    ${loaderRow('vanilla','Vanilla','Plain Minecraft, exactly as Mojang ships it. No mods, no plugins.',v)}
+    ${loaderRow('paper','Paper','Same game for your friends — no client install needed — but the server can run <b>plugins</b> (homes, voice chat, anti-grief). Also runs faster than vanilla.',v)}
+    ${loaderRow('fabric','Fabric','Real <b>mods</b> — new blocks, mobs, machines. Everyone joining must install the same mods in their own launcher.',v)}
+  </div>`;
+}
+function loaderRow(k,label,desc,v){
+  const on=v.type===k;
+  const blocked=(k==='paper'&&!v.paperOk)?`not available for ${v.current} yet`:(k==='fabric'&&!v.fabricOk)?`not available for ${v.current} yet`:'';
+  return `<div class="listrow">
+    <div style="min-width:0"><div style="font-weight:600">${esc(label)} ${on?'<span class="tag good">current</span>':''}${blocked?`<span class="tag bad">${esc(blocked)}</span>`:''}</div>
+      <div class="meta">${desc}</div></div>
+    ${on?'<span class="btn sm" style="opacity:.45;cursor:default">in use</span>'
+        :blocked?'<span class="btn sm" style="opacity:.35;cursor:default">—</span>'
+        :`<button class="btn sm" onclick="askLoader('${k}','${attr(label)}')" ${v.running?'disabled style="opacity:.4"':''}>Switch</button>`}
+  </div>`;
+}
+function askUpdate(){
+  const sel=el('verPick');if(!sel)return;const to=sel.value;const v=VINFO;
+  if(to===v.current){toast('Already on '+to+'.');return;}
+  openHold('Update to Minecraft '+esc(to)+'?',
+    `<b>${esc(ACTIVE)}</b> goes from ${esc(v.current||'?')} to ${esc(to)}. Your world is zipped to Backups first and the old jar is kept for one-click rollback.<br/><br/>
+     Everyone who plays here must switch their launcher to ${esc(to)} too${v.mods?`, and your ${v.mods} ${esc(v.modKind)}${v.mods===1?'':'s'} may need updating`:''}.`,
+    'Hold to update',
+    async()=>{toast('Downloading '+to+'…');const r=await api('/api/server/update','POST',{name:ACTIVE,version:to});toast(r.msg);tick();loadVersion();});
+}
+function askRollback(){
+  const v=VINFO;
+  openHold('Roll back?',`Puts the previous server jar${v.prev?' ('+esc(v.prev)+')':''} back for <b>${esc(ACTIVE)}</b>. Your world is left alone.`,
+    'Hold to roll back',
+    async()=>{toast('Rolling back…');const r=await api('/api/server/rollback','POST',{name:ACTIVE});toast(r.msg);tick();loadVersion();});
+}
+function askLoader(target,label){
+  const v=VINFO;
+  const extra=target==='fabric'?'Every friend will need Fabric plus the same mods in their own launcher.'
+            :target==='paper'?'Your friends need nothing — plugins live on the server only.'
+            :'Any mods or plugins you installed will stop loading.';
+  openHold('Switch to '+esc(label)+'?',
+    `<b>${esc(ACTIVE)}</b> keeps its world, settings and players — only the server program changes.<br/><br/>${extra}`,
+    'Hold to switch',
+    async()=>{toast('Switching…');const r=await api('/api/server/loader','POST',{name:ACTIVE,target});toast(r.msg);tick();loadVersion();});
+}
 
 /* CONSOLE */
 function viewConsole(){return `<h1 class="page-h">Console</h1><p class="page-sub">Server output &amp; commands · <label style="color:var(--muted)"><input type="checkbox" id="showTun" onchange="pollLog().then(renderFullLog)"/> tunnel log</label></p>
@@ -907,7 +1178,7 @@ async function doBackup(){const btn=el('bkNow');if(btn){btn.textContent='Backing
 async function toggleServer(){const cur=STATE.servers.find(s=>s.name===ACTIVE);const a=(cur&&cur.running)?'stop':'start';const r=await api('/api/server/'+a,'POST',{name:ACTIVE});toast(r.msg);tick();}
 async function tun(a){const r=await api('/api/tunnel/'+a,'POST',{name:ACTIVE});toast(r.msg);tick();}
 async function setActive(n){ACTIVE=n;await api('/api/server/setactive','POST',{name:n});tick();render();}
-async function convertPaper(n){openHold('Convert to Paper?',`This swaps ${n} to Paper (keeps your world, backs up the vanilla jar).`,'Hold to convert',async()=>{toast('Converting…');const r=await api('/api/server/convert','POST',{name:n});toast(r.msg);tick();if(CUR==='mods')loadMods();});}
+async function convertPaper(n){openHold('Switch to Paper?',`This swaps <b>${esc(n)}</b> to Paper so it can run plugins — your world, settings and players are untouched, and the old jar is kept.`,'Hold to switch',async()=>{toast('Switching…');const r=await api('/api/server/loader','POST',{name:n,target:'paper'});toast(r.msg);tick();if(CUR==='mods')loadModPage();if(CUR==='version')loadVersion();});}
 function copyAddr(){const cur=STATE.servers.find(s=>s.name===ACTIVE);const a=(cur&&cur.address)||'localhost';navigator.clipboard.writeText(a);
   const p=el('addrPill'),ic=el('addrIco'),n=el('addrNote');p.classList.add('copied');ic.innerHTML=checkIco;ic.style.color='var(--success)';
   n._lock=true;n.innerHTML='<span style="color:var(--success)">Copied for your friends ✓</span>';
