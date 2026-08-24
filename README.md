@@ -22,9 +22,10 @@ python app.py     →     http://127.0.0.1:8765
 - **Live console** — see chat, joins, deaths and errors as they happen, and type commands back.
 - **Who's online** — a live list of players currently in the world.
 - **Settings without the text file** — toggles for PvP, difficulty, whitelist, max players, MOTD (with a colour preview), plus a full `server.properties` editor behind an "Advanced" section.
-- **Create new worlds** — pick a version, vanilla or Paper, optional seed. The correct server jar is downloaded from Mojang (or PaperMC) automatically.
-- **Convert vanilla → Paper** — keeps the world, backs up the old jar, and creates a `plugins/` folder.
-- **Plugins / mods** — add by URL or local file path, remove with a click.
+- **Create new worlds** — pick a version, Vanilla, Paper or Fabric, optional seed. The correct server jar is downloaded from Mojang, PaperMC or FabricMC automatically.
+- **Switch loader any time** — Vanilla ⇄ Paper ⇄ Fabric in one click. Your world, settings and players are untouched, and the old jar is kept so you can go back.
+- **Browse mods without leaving the panel** — search **CurseForge** and **Modrinth** right in the Mods tab, see downloads and descriptions, and install with one click. Required dependencies come along automatically. [Details below.](#mods-and-plugins)
+- **Change Minecraft version** — see what you're on, what's newest, and update with the world backed up first. One-click rollback if it goes wrong. [Details below.](#changing-minecraft-version)
 - **World icons** — the little picture next to your server in the Minecraft multiplayer list. Any image, auto-resized to 64×64.
 - **Backups** — automatic on every stop and every 2 hours (keeps the last 15), plus "Back up now" and one-click restore.
 - **An AI that lives in your server** — optional. You name it, you pick its brain (a free local model or any paid API), and it talks to players in chat and runs commands for people you trust. [Details below.](#the-ai)
@@ -285,6 +286,7 @@ Created automatically on first run, next to `app.py`. Stop the panel before edit
   "active": "MyWorld",
   "memory": { "min": "2G", "max": "4G" },
   "protected": ["MyWorld"],
+  "curseforgeKey": "your-curseforge-api-key",
   "bank": []
 }
 ```
@@ -296,11 +298,106 @@ Created automatically on first run, next to `app.py`. Stop the panel before edit
 | `servers[].group` | A label, e.g. "College friends". Cosmetic. |
 | `memory` | RAM given to every world (`-Xms` / `-Xmx`). Give it about half your total RAM, and never more than you actually have. |
 | `protected` | Names that can't be deleted from the panel — a guard for your main world. |
+| `curseforgeKey` | Your free CurseForge API key, so the Mods tab can search CurseForge. Optional — Modrinth needs no key. Easiest set from the Mods tab. |
 | `bank` | The tunnel bank, described above. Also editable from the UI. |
 
-**`config.json` holds your playit secret. It is in `.gitignore` — keep it that way,
-and don't paste it anywhere public.** Anyone with that key can run tunnels on your
-playit account.
+**`config.json` holds your playit secret and your CurseForge key. It is in
+`.gitignore` — keep it that way, and don't paste it anywhere public.** Anyone with
+the playit secret can run tunnels on your account.
+
+---
+
+## Mods and plugins
+
+The **Mods** tab is a search box for CurseForge and Modrinth. You never have to
+find a download link yourself.
+
+### First: your world needs a loader
+
+A **vanilla** server cannot load anything — that is Minecraft's design, not a limit
+of the panel. So the Mods tab will tell you to switch first. Open the **Version**
+tab and pick one:
+
+| | What you get | What your friends have to do |
+|---|---|---|
+| **Paper** | *Plugins* — claims, homes, teleports, anti-grief, world edit. Server-side only. | **Nothing.** They join with ordinary Minecraft. |
+| **Fabric** | *Mods* — Create, JEI, Waystones, new blocks and mobs. | **Install the same mods themselves**, or they can't join. |
+
+Switching keeps your world, your settings and your players. The old jar is kept, so
+you can switch back.
+
+> **Pick Paper if your friends aren't technical.** Mods are more fun, but every
+> single player needs the identical mod list in their own launcher. Plugins ask
+> nothing of them.
+
+### Browsing and installing
+
+1. Open the **Mods** tab and click **Browse**.
+2. Choose **CurseForge** or **Modrinth** with the toggle.
+3. Type what you want — `waystones`, `jei`, `create` — and hit search.
+
+Results are already filtered to your Minecraft version and your loader, so anything
+you see will actually run. Each result shows its icon, author, download count and
+last-updated date.
+
+Click **Install** and the panel downloads the right file into `mods/` (or `plugins/`),
+**plus every mod it depends on**. Installing Waystones, for example, quietly brings
+Fabric API, Balm and Shogi with it — you don't have to know that list.
+
+Then **restart the world** to load it.
+
+**Updating a mod** is just installing it again — the panel matches it by name and
+replaces the old jar instead of leaving two copies fighting each other.
+
+### The CurseForge key
+
+**Modrinth works immediately and needs nothing.** CurseForge requires a free API
+key — their rule, not the panel's. If you never touch CurseForge you can ignore
+this entirely.
+
+To add one:
+
+1. Sign in at [console.curseforge.com](https://console.curseforge.com/).
+2. Copy the API key it gives you.
+3. In the Mods tab, click **Add CurseForge key**, paste, save.
+
+The panel checks the key against CurseForge before saving it, so you'll know at once
+if it's wrong. It's stored in `config.json` as `curseforgeKey` — which is
+`.gitignore`d, and should stay that way.
+
+Some CurseForge authors switch off third-party downloads. Those show as
+**open page** instead of **Install**; that opens the mod's own page so you can
+download it yourself, then use **Add from file** at the bottom of the tab.
+
+### Adding something by hand
+
+The Mods tab still takes a direct `.jar` URL or a file from your PC, for anything
+that isn't in either catalogue. Remove any mod with the **×** next to it.
+
+---
+
+## Changing Minecraft version
+
+The **Version** tab shows what your world runs, what the newest release is, and
+whether Paper and Fabric support it yet.
+
+Updating **backs the world up first**, keeps the old jar as `server.jar.previous`,
+and gives you a **Rollback** button that flips between the two.
+
+> **The big warning:** everyone who plays has to change their launcher to the
+> matching version on the same day you do. A server on 26.2 will simply refuse a
+> player still on 26.1.2, with an unhelpful error. Tell your friends *before* you
+> click, not after.
+
+Two more things worth knowing:
+
+- **Newer Minecraft needs newer Java.** The tab checks the Java you have installed
+  and warns you if the version you picked needs a newer one.
+- **Mods are version-locked.** Updating Minecraft usually means re-installing your
+  mods for the new version. Do it on a copy of the world first if the world matters.
+
+Minecraft moved to year-based version numbers (26.1, 26.2 …). Don't be surprised
+when the newest release isn't a `1.21.x`.
 
 ---
 
@@ -374,6 +471,8 @@ from the panel to get the console back.
 app.py            the whole backend — HTTP server, process management,
                   backups, jar downloads, config. Standard library only.
 ui/index.html     the whole frontend — one file, no build step, no dependencies.
+modstore.py       the mod catalogue: CurseForge + Modrinth search, version and
+                  loader filtering, dependency resolution. Standard library only.
 ai.py             the console companion: chat, providers, trust, memory.
                   Optional — delete it and the panel runs exactly as before.
 mc_tools.py       the toolbelt: every Minecraft command the AI may use, with

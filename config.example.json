@@ -24,6 +24,9 @@
 
   "protected": ["MyWorld"],
 
+  "_curseforgeKey_note": "Optional. Free key from console.curseforge.com, so the Mods tab can search CurseForge. Modrinth needs no key. Easiest added from the Mods tab in the UI.",
+  "curseforgeKey": "",
+
   "bank": [
     { "port": 25565, "address": "world-one.gl.joinmc.link" },
     { "port": 25566, "address": "world-two.gl.joinmc.link" }
