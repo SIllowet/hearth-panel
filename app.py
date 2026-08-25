@@ -1249,6 +1249,11 @@ class Handler(BaseHTTPRequestHandler):
             if not hearth_setup:
                 self._send(200, {"exists": False}); return
             self._send(200, hearth_setup.shortcut_status()); return
+        if path == '/api/network':
+            if not hearth_setup:
+                self._send(200, {"ran": False}); return
+            aud = q.get('audience', 'anyone')
+            self._send(200, hearth_setup.network_probe(aud)); return
         if path == '/api/mods/browse':
             self._send(200, browse_mods(q.get('name', ''), q.get('source', 'modrinth'),
                                         q.get('q', ''), q.get('page', 0) or 0)); return

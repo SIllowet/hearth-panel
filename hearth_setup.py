@@ -200,8 +200,10 @@ def _check_write_access():
 
 def doctor():
     """Everything Hearth needs, and plain-language help for whatever is missing."""
+    # playit is deliberately NOT here. It is one of three ways to let people
+    # in, not something Hearth is missing - see network_probe().
     checks = [_check_python(), _check_java(), _check_write_access(),
-              _check_playit(), _check_server_files()]
+              _check_server_files()]
     blocking = [c for c in checks if not c["ok"] and not c.get("optional")]
     optional = [c for c in checks if not c["ok"] and c.get("optional")]
     return {
@@ -459,3 +461,180 @@ def make_shortcut():
         return {"ok": False, "msg": "Windows would not make the shortcut. %s"
                                     % (err[0][:110] if err else '')}
     return {"ok": True, "path": lnk, "msg": "Added Hearth to your desktop."}
+
+
+# ------------------------------------------------------- how to let people in
+# There is no single right answer here. Someone whose provider hands out shared
+# addresses physically cannot forward a port; someone playing with three
+# friends does not need a public address at all. So rather than assume, Hearth
+# looks at the connection and says which option actually fits.
+TUNNEL_PORT_DEFAULT = 25565
+
+
+def _private(ip):
+    try:
+        a, b = (int(x) for x in ip.split('.')[:2])
+    except Exception:
+        return False
+    return (a == 10 or a == 127 or (a == 172 and 16 <= b <= 31)
+            or (a == 192 and b == 168) or (a == 169 and b == 254))
+
+
+def _cgnat(ip):
+    """100.64.0.0/10 - the range providers use when they cannot give you a real one."""
+    try:
+        a, b = (int(x) for x in ip.split('.')[:2])
+    except Exception:
+        return False
+    return a == 100 and 64 <= b <= 127
+
+
+def local_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(('8.8.8.8', 80))
+        return s.getsockname()[0]
+    except Exception:
+        return ''
+    finally:
+        try: s.close()
+        except Exception: pass
+
+
+def _hops(limit=4, timeout=14):
+    """First few routers between this PC and the internet."""
+    if os.name != 'nt':
+        return []
+    out = _run(['tracert', '-d', '-h', str(limit), '-w', '600', '8.8.8.8'], timeout=timeout)
+    found = []
+    for line in out.splitlines():
+        m = re.findall(r'(\d+\.\d+\.\d+\.\d+)', line)
+        if m:
+            found.append(m[-1])
+    return found
+
+
+def _public_ip(timeout=6):
+    for url in ('https://api.ipify.org', 'https://ifconfig.me/ip'):
+        try:
+            ip = _get(url, timeout).decode('utf-8').strip()
+            if re.match(r'^\d+\.\d+\.\d+\.\d+$', ip):
+                return ip
+        except Exception:
+            continue
+    return ''
+
+
+def _installed():
+    return {
+        "playit": os.path.exists(os.path.join(BASE, 'playit.exe'))
+                  or bool(shutil.which('playit')),
+        "tailscale": bool(shutil.which('tailscale'))
+                     or os.path.exists(r"C:\Program Files\Tailscale\tailscale.exe"),
+    }
+
+
+def network_probe(audience='anyone'):
+    """
+    Work out what this connection can actually do. Everything here is read-only.
+    The one outside request is asking a public service what your address looks
+    like from the internet - there is no way to know that from inside.
+    """
+    hops = _hops()
+    pub = _public_ip()
+    priv_hops = [h for h in hops if _private(h)]
+    first_public = next((h for h in hops if not _private(h)), '')
+
+    behind_cgnat = _cgnat(pub) or any(_cgnat(h) for h in hops)
+    double_nat = len(priv_hops) >= 2
+    have = _installed()
+
+    facts, verdict = [], ''
+    if not pub and not hops:
+        facts.append({"t": "Could not read your connection.",
+                      "d": "You may be offline. The options below all still work "
+                           "- Hearth just cannot tell you which fits best."})
+        verdict = 'unknown'
+    elif behind_cgnat:
+        facts.append({"t": "Your provider gives you a shared address.",
+                      "d": "Lots of homes share one address, so there is no door "
+                           "to open. Forwarding a port cannot work on this "
+                           "connection, no matter what you change on the router."})
+        verdict = 'tunnel-only'
+    elif double_nat:
+        facts.append({"t": "You have two routers, one behind the other.",
+                      "d": "Usually your provider's box plus your own. Forwarding "
+                           "a port means setting it up on both, and you may not "
+                           "have the password for the first one."})
+        verdict = 'tunnel-preferred'
+    else:
+        facts.append({"t": "You have a normal, direct connection.",
+                      "d": "Forwarding a port on your router should work if you "
+                           "want to go that way."})
+        verdict = 'forward-possible'
+
+    if pub:
+        facts.append({"t": "Your address changes from time to time.",
+                      "d": "Almost every home connection does. Whatever address "
+                           "you hand out will stop working eventually unless you "
+                           "use a tunnel or a free dynamic DNS service."})
+    return {
+        "ran": True,
+        "verdict": verdict,
+        "facts": facts,
+        "installed": have,
+        "local_ip": local_ip(),
+        "double_nat": double_nat,
+        "cgnat": behind_cgnat,
+        "hops": len(hops),
+        "public_seen": bool(pub),
+        "recommend": recommend_for(verdict, have, audience),
+    }
+
+
+def recommend_for(verdict, have, audience='anyone'):
+    """
+    Who you are playing with decides this more than your connection does.
+    The network only rules options in or out.
+    """
+    ts_ready = have.get('tailscale')
+
+    if audience == 'house':
+        return {"pick": "local",
+                "because": "Everyone is on your wifi, so nothing needs to leave "
+                           "your home at all. Hand them the local address below.",
+                "alt": None}
+
+    if audience == 'friends':
+        return {"pick": "tailscale",
+                "because": ("You already have Tailscale, so this is the least "
+                            "work: invite them and you are done."
+                            if ts_ready else
+                            "For a small group this is the safest option. Nothing "
+                            "is exposed to the internet and your home address "
+                            "stays private. Everyone installs one small app."),
+                "alt": "playit"}
+
+    # audience == 'anyone'
+    if verdict == 'tunnel-only':
+        return {"pick": "playit",
+                "because": "Your connection cannot accept visitors directly, so a "
+                           "tunnel is the only thing that will work for people "
+                           "outside your home.",
+                "alt": None}
+    if verdict == 'tunnel-preferred':
+        return {"pick": "playit",
+                "because": "It skips the two-router problem entirely. Nothing to "
+                           "configure, and it works for anyone you send the "
+                           "address to.",
+                "alt": "forward"}
+    if verdict == 'forward-possible':
+        return {"pick": "playit",
+                "because": "Forwarding a port would work on your connection, but a "
+                           "tunnel is less trouble and keeps your home address out "
+                           "of strangers' hands. Choose forwarding if you would "
+                           "rather not rely on anyone else.",
+                "alt": "forward"}
+    return {"pick": "playit",
+            "because": "It works on the widest range of connections.",
+            "alt": None}

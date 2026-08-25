@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.0
+
+- **Hearth now helps you pick how people join.** Tell it who is coming — your
+  house, a few friends, or anyone you send the address to — and it looks at
+  your connection and says which option will actually work, and why.
+- It can tell when your provider gives you a shared address, in which case
+  forwarding a port cannot work at all, and when you have two routers stacked,
+  which makes it a chore. Better to know before you spend an evening on it.
+- playit, Tailscale and forwarding a port are now three equal choices rather
+  than one assumed default. Anything you already have installed is marked.
+- playit is no longer listed as something Hearth is missing. It never was.
+
 ## 1.1.0
 
 - **Hearth opens in its own window.** No address bar, no browser tab. It gets

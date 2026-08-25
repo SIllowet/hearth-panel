@@ -366,11 +366,40 @@
 .fixnote{color:var(--muted);font-size:12.5px;max-width:52ch}
 .upd h3{color:var(--ember)}
 .updnotes{margin:9px 0 0;padding-left:18px;color:var(--muted);font-size:13px;line-height:1.65}
-.sharegood{color:var(--ember);font-size:13px;margin:8px 0 2px}
-.sharebody{color:var(--muted);font-size:13.5px;line-height:1.65;max-width:66ch}
-.sharebody ol{padding-left:19px;margin:9px 0}
-.sharebody li{margin:5px 0}
-.sharebody code{background:var(--bg2,rgba(255,255,255,.05));padding:1px 5px;border-radius:5px;font-size:12.5px}
+
+
+
+
+
+
+/* letting people in */
+.audrow{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;margin:10px 0 14px}
+.audbtn{display:flex;flex-direction:column;gap:2px;text-align:left;padding:10px 12px;
+  border:1px solid var(--border);border-radius:var(--r-ctrl);background:transparent;
+  color:var(--text);cursor:pointer;font:inherit}
+.audbtn span{color:var(--muted);font-size:12px}
+.audbtn:hover{border-color:var(--borderWarm)}
+.audbtn.on{border-color:var(--ember);color:var(--ember)}
+.audbtn.on span{color:var(--muted)}
+.privnote{color:var(--muted);font-size:12px;margin-top:10px;max-width:62ch;line-height:1.5}
+.facts{margin:4px 0 12px}
+.fact{padding:9px 0;border-top:1px solid var(--border)}
+.fact:first-child{border-top:0}
+.fact b{display:block;font-size:13.5px}
+.fact span{display:block;color:var(--muted);font-size:12.5px;margin-top:2px;
+  line-height:1.55;max-width:64ch}
+.way{border:1px solid var(--border);border-radius:var(--r-ctrl);padding:13px 15px;margin-top:10px}
+.way.rec{border-color:var(--ember)}
+.wayhead{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.rectag{font-size:11px;color:var(--ember);border:1px solid var(--borderWarm);
+  border-radius:99px;padding:1px 8px}
+.insttag,.waytag{font-size:11px;color:var(--muted);border:1px solid var(--border);
+  border-radius:99px;padding:1px 8px}
+.wayreason{color:var(--ember);font-size:13px;margin:8px 0 0;max-width:64ch;line-height:1.55}
+.waybody{color:var(--muted);font-size:13.5px;line-height:1.65;max-width:66ch}
+.waybody ol{padding-left:19px;margin:9px 0}
+.waybody li{margin:5px 0}
+.waybody code{background:var(--bg2,rgba(255,255,255,.05));padding:1px 5px;border-radius:5px;font-size:12.5px}
 </style>
 </head>
 <body>
@@ -441,7 +470,7 @@ function buildNav(){el('nav').innerHTML=TABS.map(([k,l])=>`<button data-k="${k}"
 function go(k){CUR=k;document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.k===k));render();}
 
 /* ---------------- setup: what's missing, updates, sharing ---------------- */
-let DOC=null, UPD=null, SHARE='playit', SHORTCUT=null;
+let DOC=null, UPD=null, SHORTCUT=null;
 
 function viewSetupShell(){return `<h1 class="page-h">Setup</h1>
   <p class="page-sub">What Hearth needs, and how to let friends in.</p>
@@ -522,57 +551,116 @@ async function doUpdate(){
   UPD=await api('/api/update/check'); renderSetup();
 }
 
-const SHARE_WAYS={
-  playit:{t:'playit tunnel', good:'Works for everyone. Nothing to configure on your router.',
+/* Letting people in — ask who is joining, look at the connection, then
+   recommend. There is no single right answer: someone on a shared provider
+   address physically cannot forward a port, and someone playing with three
+   friends does not need a public address at all. */
+let AUDIENCE='anyone', NET=null, NETBUSY=false, SHOWALL=false;
+
+const AUDIENCES=[
+  ['house','Just my house','Everyone is on the same wifi'],
+  ['friends','A few friends','The same small group each time'],
+  ['anyone','Anyone I send it to','Or a public server']
+];
+
+const WAYS={
+  local:{t:'No setup needed', tag:'nothing to install',
+    body:`<p>Everyone is already on your network, so there is nothing to set up.
+      Give them this PC's local address with <code>:25565</code> after it and they
+      can join straight away.</p>`},
+  playit:{t:'playit tunnel', tag:'works on any connection',
     body:`<p>playit gives your world an address like <code>example.playit.gg</code>
-      that your friends can join from anywhere. It is the simplest option and the
-      one Hearth sets up for you.</p>
+      that anyone can join from anywhere. Nothing to change on your router, and
+      your home address stays private — people connect to playit, not to you.</p>
       <ol><li>Download <code>playit.exe</code> and put it in your Hearth folder.</li>
       <li>Open Worlds and light the hearth. Hearth starts the tunnel with it.</li>
-      <li>Copy the address it shows you and send it to your friends.</li></ol>
-      <p class="muted">Your home address stays private &mdash; friends connect to
-      playit, not to you.</p>`,
+      <li>Send the address it shows you to your friends.</li></ol>`,
     link:['Get playit','https://playit.gg/download']},
-  tailscale:{t:'Tailscale', good:'Private and free. Friends install one small app.',
-    body:`<p>Tailscale puts you and your friends on the same private network, as
-      though you were in the same house. Nothing is exposed to the public internet.</p>
-      <ol><li>Install Tailscale and sign in, on your PC and on each friend's PC.</li>
-      <li>Invite them to your network from the Tailscale admin page.</li>
-      <li>Give them the address Tailscale shows for this PC, with <code>:25565</code>
-      on the end.</li></ol>
-      <p class="muted">Best when you play with the same few people. Everyone needs
-      the app installed, so it is not ideal for strangers.</p>`,
+  tailscale:{t:'Tailscale', tag:'private, nothing exposed',
+    body:`<p>Tailscale puts you and your friends on one private network, as though
+      you were in the same house. Nothing is opened to the internet at all.</p>
+      <ol><li>Install Tailscale and sign in — on your PC and each friend's PC.</li>
+      <li>Invite them from the Tailscale admin page.</li>
+      <li>Give them the address Tailscale shows for this PC, with
+      <code>:25565</code> after it.</li></ol>
+      <p class="muted">Everyone needs the app installed, so it suits a regular
+      group rather than strangers.</p>`,
     link:['Get Tailscale','https://tailscale.com/download']},
-  forward:{t:'Forward a port', good:'No third party involved. Fiddly, and shows your home address.',
-    body:`<p>This opens a door on your own router so people can reach your PC
-      directly. It works, but it is the most involved option and it publishes your
-      home IP address to everyone who joins.</p>
-      <ol><li>Find your PC's local address (Hearth shows it on Home).</li>
-      <li>Open your router's settings page in a browser &mdash; usually
-      <code>192.168.1.1</code> or <code>192.168.0.1</code>.</li>
-      <li>Find <b>Port forwarding</b> and add a rule sending port <code>25565</code>
-      to your PC's local address.</li>
-      <li>If you have two routers &mdash; an ISP box and your own &mdash; you must
-      add the rule on <b>both</b>, pointing the first at the second.</li>
-      <li>Allow Java through Windows Firewall when it asks.</li></ol>
-      <p class="muted">Two things to know. Most home connections change address
-      every so often, so what you give friends will stop working &mdash; a free
-      dynamic DNS service fixes that. And some providers block this entirely; if
-      so, use playit instead.</p>`,
-    link:['','']}
+  forward:{t:'Forward a port yourself', tag:'no third party involved',
+    body:`<p>This opens a door on your own router so people reach your PC directly.
+      No one else is involved — but it does publish your home address to everyone
+      who joins, and it is the most fiddly option.</p>
+      <ol><li>Open your router's settings page — usually <code>192.168.1.1</code>.</li>
+      <li>Find <b>Port forwarding</b> and send port <code>25565</code> to this PC.</li>
+      <li>Allow Java through Windows Firewall when it asks.</li></ol>`}
 };
 
+function audienceRow(){
+  return `<div class="audrow">${AUDIENCES.map(([k,l,d])=>
+    `<button class="audbtn${k===AUDIENCE?' on':''}" onclick="pickAudience('${k}')">
+      <b>${esc(l)}</b><span>${esc(d)}</span></button>`).join('')}</div>`;
+}
+
+function pickAudience(k){ AUDIENCE=k; if(NET) probeNetwork(); else renderSetup(); }
+
+async function probeNetwork(){
+  NETBUSY=true; renderSetup();
+  try{ NET=await api('/api/network?audience='+encodeURIComponent(AUDIENCE)); }
+  catch(e){ NET=null; }
+  NETBUSY=false; renderSetup();
+}
+
+function wayBlock(key, recommended, reason){
+  const w=WAYS[key]; if(!w) return '';
+  const inst=NET&&NET.installed&&NET.installed[key];
+  const link=w.link?`<a class="btn sm" href="${attr(w.link[1])}" target="_blank" rel="noopener">${esc(w.link[0])}</a>`:'';
+  return `<div class="way${recommended?' rec':''}">
+    <div class="wayhead">
+      <b>${esc(w.t)}</b>
+      ${recommended?'<span class="rectag">best for you</span>':''}
+      ${inst?'<span class="insttag">already installed</span>':''}
+      <span class="waytag">${esc(w.tag)}</span>
+    </div>
+    ${reason?`<p class="wayreason">${esc(reason)}</p>`:''}
+    <div class="waybody">${w.body}</div>
+    ${link?`<div class="row" style="margin-top:9px">${link}</div>`:''}
+  </div>`;
+}
+
 function shareCard(){
-  const tabs=Object.keys(SHARE_WAYS).map(k=>
-    `<button class="btn sm ${k===SHARE?'':'ghost'}" onclick="SHARE='${k}';renderSetup()">${esc(SHARE_WAYS[k].t)}</button>`).join('');
-  const w=SHARE_WAYS[SHARE];
-  const link=w.link&&w.link[1]?`<a class="btn sm" href="${attr(w.link[1])}" target="_blank" rel="noopener">${esc(w.link[0])}</a>`:'';
-  return `<div class="card"><h3>Letting friends in</h3>
-    <p class="muted">Three ways. You only need one.</p>
-    <div class="row" style="gap:7px;margin:10px 0 4px">${tabs}</div>
-    <p class="sharegood">${esc(w.good)}</p>
-    <div class="sharebody">${w.body}</div>
-    ${link?`<div class="row" style="margin-top:10px">${link}</div>`:''}</div>`;
+  let inner='';
+  if(NETBUSY){
+    inner=`<p class="muted">Looking at your connection&hellip; this takes a few seconds.</p>`;
+  } else if(!NET){
+    inner=`<p class="muted">Hearth can look at your connection and tell you which
+      option will actually work. Some providers make forwarding a port impossible,
+      and there is no way to know without checking.</p>
+      <div class="row" style="margin-top:11px">
+        <button class="btn" onclick="probeNetwork()">Check my connection</button>
+      </div>
+      <p class="privnote">This runs a trace to your first few routers, and asks a
+      public service what your address looks like from outside — the only way to
+      find that out. Nothing is stored or sent anywhere else.</p>`;
+  } else {
+    const rec=NET.recommend||{};
+    const facts=(NET.facts||[]).map(f=>
+      `<div class="fact"><b>${esc(f.t)}</b><span>${esc(f.d)}</span></div>`).join('');
+    const others=Object.keys(WAYS).filter(k=>k!==rec.pick &&
+      !(AUDIENCE==='house' && k!=='local') && !(AUDIENCE!=='house' && k==='local'));
+    inner=`${facts?`<div class="facts">${facts}</div>`:''}
+      ${NET.local_ip?`<p class="muted">This PC on your network: <code>${esc(NET.local_ip)}:25565</code></p>`:''}
+      ${wayBlock(rec.pick, true, rec.because)}
+      <div class="row" style="margin-top:12px">
+        <button class="btn ghost sm" onclick="SHOWALL=!SHOWALL;renderSetup()">
+          ${SHOWALL?'Hide the other ways':'Show the other ways'}</button>
+        <button class="btn ghost sm" onclick="probeNetwork()">Check again</button>
+      </div>
+      ${SHOWALL?others.map(k=>wayBlock(k,false,'')).join(''):''}`;
+  }
+  return `<div class="card"><h3>Letting people in</h3>
+    <p class="muted">Who is going to join?</p>
+    ${audienceRow()}
+    ${inner}</div>`;
 }
 
 function shortcutCard(){
