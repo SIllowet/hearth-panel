@@ -16,6 +16,12 @@ except Exception as _e:              # the panel must still boot without it
     modstore = None
     print("modstore not loaded:", _e)
 
+try:
+    import hearth_setup              # first-run checks + self-update
+except Exception as _e:              # the panel must still boot without it
+    hearth_setup = None
+    print("hearth_setup not loaded:", _e)
+
 BASE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE, 'config.json')
 UI_DIR = os.path.join(BASE, 'ui')
@@ -1230,6 +1236,15 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"list": list_backups(q.get('name', ''))}); return
         if path == '/api/bank':
             self._send(200, bank_status()); return
+        if path == '/api/doctor':
+            if not hearth_setup:
+                self._send(200, {"ready": True, "checks": [],
+                                 "msg": "setup checks unavailable"}); return
+            self._send(200, hearth_setup.doctor()); return
+        if path == '/api/update/check':
+            if not hearth_setup:
+                self._send(200, {"ok": False, "msg": "updates unavailable"}); return
+            self._send(200, hearth_setup.check_update()); return
         if path == '/api/mods/browse':
             self._send(200, browse_mods(q.get('name', ''), q.get('source', 'modrinth'),
                                         q.get('q', ''), q.get('page', 0) or 0)); return
@@ -1302,6 +1317,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/server/setactive':
             CONFIG['active'] = name; save_config(CONFIG)
             self._send(200, {"ok": True, "msg": "Active server: " + name}); return
+        if path == '/api/update/stage':
+            if not hearth_setup:
+                self._send(200, {"ok": False, "msg": "updates unavailable"}); return
+            self._send(200, hearth_setup.stage_update()); return
         if path == '/api/quit':
             self._send(200, {"ok": True, "msg": "Shutting down panel..."})
             threading.Thread(target=lambda: (time.sleep(0.5), os._exit(0)), daemon=True).start()
@@ -1314,6 +1333,15 @@ class Handler(BaseHTTPRequestHandler):
 import urllib.parse  # noqa (used in handler)
 
 def main():
+    # A download from last session is swapped in here, before anything opens.
+    # Only Hearth's own files are touched; worlds and config are left alone.
+    if hearth_setup:
+        try:
+            done = hearth_setup.apply_staged()
+            if done:
+                print(done)
+        except Exception as _e:
+            print("update could not be applied:", _e)
     url = "http://%s:%d/" % (HOST, PORT)
     try:
         httpd = ThreadingHTTPServer((HOST, PORT), Handler)

@@ -16,3 +16,9 @@ __pycache__/
 servers/
 backups/
 *.jar
+
+# Staged update downloads
+.update/
+
+# Local safety backups made before edits
+*.bak-*

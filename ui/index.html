@@ -346,6 +346,30 @@
 .note.warn{border-left-color:var(--danger)}
 .bigver{font-size:30px;font-weight:600;letter-spacing:.3px;line-height:1.1}
 .scrollbox{max-height:340px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--r-ctrl)}
+
+/* setup screen */
+.okbanner,.badbanner{padding:11px 14px;border-radius:var(--r-ctrl);margin-bottom:14px;font-size:14px;
+  border:1px solid var(--border)}
+.okbanner{color:var(--muted)}
+.badbanner{color:var(--ember);border-color:var(--borderWarm)}
+.checkrow{display:flex;gap:11px;padding:13px 0;border-top:1px solid var(--border)}
+.checkrow:first-of-type{border-top:0}
+.checkmark{flex:none;margin-top:1px;display:block}
+.checkmain{flex:1;min-width:0}
+.checkhead{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.checkdetail{color:var(--muted);font-size:12.5px}
+.tagopt{font-size:11px;color:var(--muted);border:1px solid var(--border);
+  border-radius:99px;padding:1px 7px}
+.checkwhy{color:var(--muted);font-size:13px;margin-top:3px;line-height:1.5;max-width:62ch}
+.fixrow{display:flex;align-items:center;gap:10px;margin-top:9px;flex-wrap:wrap}
+.fixnote{color:var(--muted);font-size:12.5px;max-width:52ch}
+.upd h3{color:var(--ember)}
+.updnotes{margin:9px 0 0;padding-left:18px;color:var(--muted);font-size:13px;line-height:1.65}
+.sharegood{color:var(--ember);font-size:13px;margin:8px 0 2px}
+.sharebody{color:var(--muted);font-size:13.5px;line-height:1.65;max-width:66ch}
+.sharebody ol{padding-left:19px;margin:9px 0}
+.sharebody li{margin:5px 0}
+.sharebody code{background:var(--bg2,rgba(255,255,255,.05));padding:1px 5px;border-radius:5px;font-size:12.5px}
 </style>
 </head>
 <body>
@@ -380,6 +404,10 @@
 <script>
 /* ---------------- icons ---------------- */
 const ICON={
+  setup:'<path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7v5l3 2"/><path d="M16.5 3.5 21 8l-2 1-2.5-2.5z"/>',
+  ticket:'<path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M13 5v2"/><path d="M13 17v2"/><path d="M13 11v2"/>',
+  flame:'<path d="M12 3q1 4 4 6.5t3 5.5a1 1 0 0 1-14 0 5 5 0 0 1 1-3 1 1 0 0 0 5 0c0-2-1.5-3-1.5-5q0-2 2.5-4"/>',
+  moon:'<path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/>',
   home:'<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/>',
   worlds:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 2.5 15 0 18M12 3c-2.5 2.5-2.5 15 0 18"/>',
   settings:'<circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.3l2-1.5-2-3.4-2.3 1a7 7 0 0 0-2.3-1.3L13.8 2h-3.6l-.5 2.5A7 7 0 0 0 7.4 5.8l-2.3-1-2 3.4 2 1.5a7 7 0 0 0 0 2.6l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 2.3 1.3l.5 2.5h3.6l.5-2.5a7 7 0 0 0 2.3-1.3l2.3 1 2-3.4-2-1.5c.07-.43.1-.86.1-1.3Z"/>',
@@ -394,7 +422,7 @@ const copyIco='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" strok
 const checkIco='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4 10-11"/></svg>';
 
 /* ---------------- state ---------------- */
-const TABS=[['home','Home'],['worlds','Worlds'],['settings','Settings'],['mods','Mods'],['version','Version'],['console','Console'],['ai','AI'],['backups','Backups']];
+const TABS=[['home','Home'],['worlds','Worlds'],['settings','Settings'],['mods','Mods'],['version','Version'],['console','Console'],['ai','AI'],['backups','Backups'],['setup','Setup']];
 let STATE=null, ACTIVE=null, CUR='home', PROPS={}, DIRTY={}, LOG=[], lastNewIdx=-1;
 let EMPTY=null;   // null until the first poll — so we always paint once we know
 let cmdHist=[], cmdIdx=-1;
@@ -410,6 +438,153 @@ function toast(m){const t=el('toast');t.textContent=m;t.classList.add('show');cl
 /* nav */
 function buildNav(){el('nav').innerHTML=TABS.map(([k,l])=>`<button data-k="${k}" onclick="go('${k}')">${sicon(ICON[k])}<span>${l}</span></button>`).join('');}
 function go(k){CUR=k;document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.k===k));render();}
+
+/* ---------------- setup: what's missing, updates, sharing ---------------- */
+let DOC=null, UPD=null, SHARE='playit';
+
+function viewSetupShell(){return `<h1 class="page-h">Setup</h1>
+  <p class="page-sub">What Hearth needs, and how to let friends in.</p>
+  <div id="setupBody"><div class="emptyfire">Checking&hellip;</div></div>`;}
+
+async function loadSetup(){
+  const body=el('setupBody'); if(!body) return;
+  try{ DOC=await api('/api/doctor'); }catch(e){ DOC=null; }
+  renderSetup();
+  try{ UPD=await api('/api/update/check'); }catch(e){ UPD=null; }
+  renderSetup();
+}
+
+function checkRow(c){
+  const good=c.ok;
+  const tone=good?'var(--good,#7fb069)':(c.optional?'var(--muted)':'var(--ember)');
+  const mark=good
+    ? '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>'
+    : '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v5"/><path d="M12 16.5v.01"/><circle cx="12" cy="12" r="9"/></svg>';
+  let fix='';
+  if(!good && c.fix){
+    const f=c.fix;
+    const btn = f.kind==='link'
+      ? `<a class="btn sm" href="${attr(f.url)}" target="_blank" rel="noopener">${esc(f.label)}</a>`
+      : (f.kind==='route'
+          ? `<button class="btn sm" onclick="go('worlds')">${esc(f.label)}</button>`
+          : '');
+    fix=`<div class="fixrow">${btn}<span class="fixnote">${esc(f.note||'')}</span></div>`;
+  }
+  return `<div class="checkrow${good?' is-ok':''}">
+    <span class="checkmark" style="color:${tone}">${mark}</span>
+    <div class="checkmain">
+      <div class="checkhead"><b>${esc(c.label)}</b>
+        <span class="checkdetail">${esc(c.detail||'')}</span>
+        ${(!good&&c.optional)?'<span class="tagopt">optional</span>':''}</div>
+      <div class="checkwhy">${esc(c.why||'')}</div>
+      ${fix}
+    </div></div>`;
+}
+
+function updateCard(){
+  if(!UPD) return `<div class="card"><h3>Updates</h3><p class="muted">Checking&hellip;</p></div>`;
+  if(UPD.staged){
+    return `<div class="card"><h3>Updates</h3>
+      <p><b>Version ${esc(UPD.staged.version)} is ready.</b> It will be swapped in
+      the next time you start Hearth &mdash; takes about a second.</p>
+      <p class="muted">Your worlds, backups and settings are not touched.</p></div>`;
+  }
+  if(!UPD.ok){
+    return `<div class="card"><h3>Updates</h3>
+      <p class="muted">${esc(UPD.msg||'Could not check right now.')}</p>
+      <p class="muted">You are on version ${esc(UPD.local||'?')}.</p></div>`;
+  }
+  if(!UPD.update){
+    return `<div class="card"><h3>Updates</h3>
+      <p>Hearth is up to date &mdash; version ${esc(UPD.local)}.</p></div>`;
+  }
+  const notes=(UPD.notes||'').split('\n').filter(l=>l.trim().startsWith('-')).slice(0,6)
+    .map(l=>`<li>${esc(l.replace(/^\s*-\s*/,'').replace(/\*\*/g,''))}</li>`).join('');
+  return `<div class="card upd">
+    <h3>Version ${esc(UPD.remote)} is available</h3>
+    <p class="muted">You are on ${esc(UPD.local)}.</p>
+    ${notes?`<ul class="updnotes">${notes}</ul>`:''}
+    <div class="row" style="margin-top:12px">
+      <button class="btn" id="updBtn" onclick="doUpdate()">Get the update</button>
+      <a class="btn ghost sm" href="${attr(UPD.page||'#')}" target="_blank" rel="noopener">See what changed</a>
+    </div>
+    <p class="muted" style="margin-top:9px">Hearth downloads it now and swaps it
+    in when you next start. Nothing of yours is overwritten.</p></div>`;
+}
+
+async function doUpdate(){
+  const b=el('updBtn'); if(b){b.disabled=true;b.textContent='Downloading…';}
+  let r; try{ r=await api('/api/update/stage','POST',{}); }catch(e){ r={ok:false,msg:'The download failed.'}; }
+  toast(r.msg||'');
+  UPD=await api('/api/update/check'); renderSetup();
+}
+
+const SHARE_WAYS={
+  playit:{t:'playit tunnel', good:'Works for everyone. Nothing to configure on your router.',
+    body:`<p>playit gives your world an address like <code>example.playit.gg</code>
+      that your friends can join from anywhere. It is the simplest option and the
+      one Hearth sets up for you.</p>
+      <ol><li>Download <code>playit.exe</code> and put it in your Hearth folder.</li>
+      <li>Open Worlds and light the hearth. Hearth starts the tunnel with it.</li>
+      <li>Copy the address it shows you and send it to your friends.</li></ol>
+      <p class="muted">Your home address stays private &mdash; friends connect to
+      playit, not to you.</p>`,
+    link:['Get playit','https://playit.gg/download']},
+  tailscale:{t:'Tailscale', good:'Private and free. Friends install one small app.',
+    body:`<p>Tailscale puts you and your friends on the same private network, as
+      though you were in the same house. Nothing is exposed to the public internet.</p>
+      <ol><li>Install Tailscale and sign in, on your PC and on each friend's PC.</li>
+      <li>Invite them to your network from the Tailscale admin page.</li>
+      <li>Give them the address Tailscale shows for this PC, with <code>:25565</code>
+      on the end.</li></ol>
+      <p class="muted">Best when you play with the same few people. Everyone needs
+      the app installed, so it is not ideal for strangers.</p>`,
+    link:['Get Tailscale','https://tailscale.com/download']},
+  forward:{t:'Forward a port', good:'No third party involved. Fiddly, and shows your home address.',
+    body:`<p>This opens a door on your own router so people can reach your PC
+      directly. It works, but it is the most involved option and it publishes your
+      home IP address to everyone who joins.</p>
+      <ol><li>Find your PC's local address (Hearth shows it on Home).</li>
+      <li>Open your router's settings page in a browser &mdash; usually
+      <code>192.168.1.1</code> or <code>192.168.0.1</code>.</li>
+      <li>Find <b>Port forwarding</b> and add a rule sending port <code>25565</code>
+      to your PC's local address.</li>
+      <li>If you have two routers &mdash; an ISP box and your own &mdash; you must
+      add the rule on <b>both</b>, pointing the first at the second.</li>
+      <li>Allow Java through Windows Firewall when it asks.</li></ol>
+      <p class="muted">Two things to know. Most home connections change address
+      every so often, so what you give friends will stop working &mdash; a free
+      dynamic DNS service fixes that. And some providers block this entirely; if
+      so, use playit instead.</p>`,
+    link:['','']}
+};
+
+function shareCard(){
+  const tabs=Object.keys(SHARE_WAYS).map(k=>
+    `<button class="btn sm ${k===SHARE?'':'ghost'}" onclick="SHARE='${k}';renderSetup()">${esc(SHARE_WAYS[k].t)}</button>`).join('');
+  const w=SHARE_WAYS[SHARE];
+  const link=w.link&&w.link[1]?`<a class="btn sm" href="${attr(w.link[1])}" target="_blank" rel="noopener">${esc(w.link[0])}</a>`:'';
+  return `<div class="card"><h3>Letting friends in</h3>
+    <p class="muted">Three ways. You only need one.</p>
+    <div class="row" style="gap:7px;margin:10px 0 4px">${tabs}</div>
+    <p class="sharegood">${esc(w.good)}</p>
+    <div class="sharebody">${w.body}</div>
+    ${link?`<div class="row" style="margin-top:10px">${link}</div>`:''}</div>`;
+}
+
+function renderSetup(){
+  const body=el('setupBody'); if(!body) return;
+  if(!DOC){ body.innerHTML=`<div class="card"><p class="muted">Could not run the
+    setup checks. The panel still works.</p></div>`+updateCard()+shareCard(); return; }
+  const head = DOC.ready
+    ? `<div class="okbanner">Everything Hearth needs is here.${DOC.suggestions?
+        ` There ${DOC.suggestions===1?'is':'are'} ${DOC.suggestions} optional thing${DOC.suggestions===1?'':'s'} below.`:''}</div>`
+    : `<div class="badbanner">${DOC.blocking} thing${DOC.blocking===1?'':'s'} need${DOC.blocking===1?'s':''}
+        sorting before Hearth can run a world. Each one below says what to do.</div>`;
+  body.innerHTML = head
+    + `<div class="card"><h3>What Hearth needs</h3>${DOC.checks.map(checkRow).join('')}</div>`
+    + updateCard() + shareCard();
+}
 
 /* ---------------- presence + log parsing ---------------- */
 function presenceFrom(lines){
@@ -485,7 +660,7 @@ function render(){const c=el('col');c.style.animation='none';void c.offsetWidth;
   c.innerHTML='';c.classList.add('page');
   /* 'ai' is allowed through with no worlds yet — naming it and picking a brain
      is worth doing before the first world exists. */
-  if(STATE&&!STATE.servers.length&&CUR!=='worlds'&&CUR!=='ai'){c.innerHTML=viewEmpty();return;}
+  if(STATE&&!STATE.servers.length&&CUR!=='worlds'&&CUR!=='ai'&&CUR!=='setup'){c.innerHTML=viewEmpty();return;}
   if(CUR==='home')c.innerHTML=viewHome();
   else if(CUR==='worlds')c.innerHTML=viewWorlds();
   else if(CUR==='settings'){c.innerHTML=viewSettingsShell();loadSettings();}
@@ -494,6 +669,7 @@ function render(){const c=el('col');c.style.animation='none';void c.offsetWidth;
   else if(CUR==='console')c.innerHTML=viewConsole();
   else if(CUR==='ai'){c.innerHTML=viewAIShell();loadAI();}
   else if(CUR==='backups'){c.innerHTML=viewBackupsShell();loadBackups();}
+  else if(CUR==='setup'){c.innerHTML=viewSetupShell();loadSetup();}
   if(CUR==='home'){renderHomeLive(STATE&&STATE.servers.find(s=>s.name===ACTIVE));pollLog().then(()=>{renderPeek();renderPresence();});}
   if(CUR==='console'){pollLog().then(()=>{renderFullLog();const w=el('cWrap');if(w)w.scrollTop=w.scrollHeight;});}
 }
@@ -567,7 +743,7 @@ function viewWorlds(){const bk=(STATE&&STATE.bank)||{total:0,free:0};
   return `<h1 class="page-h">Your Worlds</h1><p class="page-sub">Each world is its own server for a friend group — run as many as you like, side by side.</p>
   <div class="between" style="margin-bottom:18px">
     <button class="btn" onclick="openCreate()">＋ New world</button>
-    <button class="btn ghost" onclick="openBank()">🎟️ Tunnel bank · ${bk.total?(bk.free+' / '+bk.total+' free'):'not set up'}</button>
+    <button class="btn ghost" onclick="openBank()">${sicon(ICON.ticket)} Tunnel bank · ${bk.total?(bk.free+' / '+bk.total+' free'):'not set up'}</button>
   </div>
   <div class="grid" id="wGrid" style="grid-template-columns:repeat(auto-fill,minmax(320px,1fr))"></div>`;}
 function miniCoin(n){const hu=coinHue(n);const ini=n.replace(/[^A-Za-z0-9]/g,'').slice(0,2).toUpperCase()||n[0];
@@ -588,7 +764,7 @@ function renderWorldsLive(){const g=el('wGrid');if(!g||!STATE)return;
       ${s.running&&pl.length?`<div style="margin-top:10px;display:flex;gap:5px;flex-wrap:wrap">${pl.map(miniCoin).join('')}</div>`:''}
       ${addr}
       <div class="row" style="margin-top:14px">
-        ${s.running?`<button class="btn sm" onclick="stopOne('${attr(s.name)}')">🌙 Stop</button>`:`<button class="btn sm" style="border-color:var(--borderWarm);color:var(--ember)" onclick="startOne('${attr(s.name)}')">🔥 Start</button>`}
+        ${s.running?`<button class="btn sm" onclick="stopOne('${attr(s.name)}')">${sicon(ICON.moon)} Stop</button>`:`<button class="btn sm" style="border-color:var(--borderWarm);color:var(--ember)" onclick="startOne('${attr(s.name)}')">${sicon(ICON.flame)} Start</button>`}
         ${foc?`<span class="btn sm" style="opacity:.5;cursor:default">✓ focused</span>`:`<button class="btn sm" onclick="focusServer('${attr(s.name)}')">Focus</button>`}
         <button class="btn sm" onclick="editMeta('${attr(s.name)}')">Edit</button>
         <button class="btn sm" onclick="openIcon('${attr(s.name)}')">Icon</button>
@@ -636,7 +812,7 @@ async function removeIcon(name){const r=await api('/api/server/icon/remove','POS
 /* tunnel bank */
 async function openBank(){const r=await api('/api/bank');
   const text=(r.slots||[]).map(s=>`${s.port} ${s.address}`).join('\n');
-  el('scrim').innerHTML=`<div class="sheet" style="width:540px"><h3>🎟️ Tunnel bank</h3>
+  el('scrim').innerHTML=`<div class="sheet" style="width:540px"><h3>${sicon(ICON.ticket,18)} Tunnel bank</h3>
     <p>Pre-make a batch of tunnels on playit.gg (one per port) and list them here. New worlds auto-grab a free one — and when you delete a world, its tunnel returns to the pool to be reused. ${r.total?`<b style="color:var(--ember)">${r.free} of ${r.total} free.</b>`:''}</p>
     <div class="hint-row" style="margin-bottom:6px">One per line — <b>port&nbsp;&nbsp;address</b> (e.g. <span class="mono">25566 chill-cabin.gl.joinmc.link</span>)</div>
     <textarea id="bankTxt" spellcheck="false" style="width:100%;height:190px;font-family:var(--mono);font-size:12px;resize:vertical;line-height:1.6" placeholder="25566 myworld1.gl.joinmc.link">${esc(text)}</textarea>
@@ -1239,7 +1415,7 @@ function copyAddr(){const cur=STATE.servers.find(s=>s.name===ACTIVE);const a=(cu
 function openCreate(){api('/api/versions').then(v=>{
   const bk=(STATE&&STATE.bank)||{total:0,free:0};
   el('scrim').innerHTML=`<div class="sheet"><h3>New world</h3>
-    <p>Spin up a fresh server for a friend group.${bk.total?` 🎟️ It'll auto-grab a free tunnel from your bank (<b style="color:var(--ember)">${bk.free} of ${bk.total} free</b>).`:` <span class="muted">No tunnel bank yet — it'll be LAN-only until you add an address.</span>`}</p>
+    <p>Spin up a fresh server for a friend group.${bk.total?` It'll auto-grab a free tunnel from your bank (<b style="color:var(--ember)">${bk.free} of ${bk.total} free</b>).`:` <span class="muted">No tunnel bank yet — it'll be LAN-only until you add an address.</span>`}</p>
     <div style="display:grid;gap:12px">
       <label>Name<input id="cName" placeholder="MyCozyWorld" style="width:100%;margin-top:5px"/></label>
       <label>Version<select id="cVer" style="width:100%;margin-top:5px">${(v.versions||[]).map(x=>`<option>${x}</option>`).join('')}</select></label>
@@ -1364,6 +1540,14 @@ function buildLooks(){
 }
 buildLooks();
 buildNav();go('home');tick();
+/* First run: if something is actually missing, land on Setup instead of Home.
+   Someone who has just downloaded Hearth should be told what is wrong before
+   they click Light the hearth and watch it fail for no visible reason.
+   Only blocking problems redirect - a missing playit is a suggestion, not a
+   fault, and must not hijack the panel every time it opens. */
+(async()=>{ try{ const d=await api('/api/doctor');
+  if(d && d.ready===false && d.blocking>0 && CUR==='home'){ DOC=d; go('setup'); }
+}catch(e){} })();
 setInterval(tick,2500);
 setInterval(()=>{if(CUR==='home'){pollLog().then(()=>{renderPeek();renderPresence();});}if(CUR==='console'){pollLog().then(renderFullLog);}if(CUR==='ai'){tickAI();}},1500);
 </script>
