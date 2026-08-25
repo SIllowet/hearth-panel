@@ -5,7 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Hearth · Minecraft Server Control</title>
 <style>
-  :root{
+  /* ---------------------------------------------------------------------
+     Three rooms, one hearth. The panel is named for a fireplace and its
+     signature is --ember-on: the glow rises to .9 when the server is up and
+     falls to 0 when it sleeps. Every theme below keeps that reading — the
+     rooms are how lit the place is, not replacements for the fire. Ember
+     stays the identity; the coals are moods.
+     --------------------------------------------------------------------- */
+  :root{                                    /* Hearth — lamp low, fire lit */
     --bg:#1A1410; --surface:#221A15; --surface2:#2C2118; --surfaceHover:#33271D;
     --text:#F2E8DC; --textDim:#C9BBAC; --muted:#A1907F;
     --border:#3A2D22; --borderWarm:#5A4128; --topHi:rgba(255,240,220,.05);
@@ -17,6 +24,29 @@
     --ember-on:0;
     --ui:ui-sans-serif,system-ui,'Segoe UI',Roboto,-apple-system,sans-serif;
     --mono:ui-monospace,'Cascadia Code','Cascadia Mono',Consolas,monospace;
+  }
+
+  /* Embers — the fire is out, only the coal shows. True black: the surface
+     ladder steps UP from #000 because nothing is darker, and separation comes
+     from borders rather than shadow. The glow reads strongest here. */
+  :root[data-room="embers"]{
+    --bg:#000000; --surface:#0C0A08; --surface2:#151110; --surfaceHover:#1E1815;
+    --text:#F4EDE4; --textDim:#C4B7A9; --muted:#9A8B7C;
+    --border:#241D18; --borderWarm:#463322; --topHi:rgba(255,240,220,.04);
+    --emberGlow:rgba(232,168,107,.2);
+  }
+
+  /* Daybreak — shutters open. Warm paper, not clinical white, so the ember
+     accent still belongs to it. */
+  :root[data-room="daybreak"]{
+    --bg:#F7F2EA; --surface:#FFFCF6; --surface2:#F1E9DC; --surfaceHover:#EBE1D1;
+    /* --muted is measured against the RAIL (--surface2), the tightest surface
+       in this room: #7A6A59 sat at 4.32:1 there while passing everywhere else. */
+    --text:#241C15; --textDim:#5C4E41; --muted:#6A5B4A;
+    --border:#E2D6C4; --borderWarm:#C9AE86; --topHi:rgba(120,80,40,.04);
+    /* the light room needs a deeper ember or it disappears into the paper */
+    --ember:#9A5518; --emberDeep:#7A4110; --emberGlow:rgba(154,85,24,.14);
+    --success:#5E7C3C; --danger:#A84434;
   }
   *{box-sizing:border-box}
   html,body{height:100%}
@@ -74,6 +104,23 @@
   .railfoot{margin-top:auto;padding:12px 10px 4px;border-top:1px solid var(--border)}
   .ministatus{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
   .quit{display:block;margin-top:10px;font-size:11px;color:var(--muted)}
+  .looks{margin-top:12px;display:flex;flex-direction:column;gap:7px}
+  .looks-row{display:flex;gap:5px}
+  .looks-row button{flex:1;padding:5px 0;font-size:10.5px;letter-spacing:.02em;color:var(--muted);
+    background:transparent;border:1px solid var(--border);border-radius:var(--r-ctrl);cursor:pointer;
+    transition:color var(--t-fast),border-color var(--t-fast),background var(--t-fast)}
+  .looks-row button:hover{color:var(--text);border-color:var(--borderWarm)}
+  /* label stays --text, not --ember: on the light room's tinted ground an
+     ember label measured 2.68:1. The border and glow already say "selected". */
+  .looks-row button[aria-pressed="true"]{color:var(--text);border-color:var(--ember);
+    background:var(--emberGlow)}
+  /* these must out-specify the (0,2,1) rule above, which would otherwise paint
+     the SELECTED swatch with the glow instead of its own colour */
+  .looks-row.swatches button{flex:0 0 auto;width:16px;height:16px;padding:0;
+    border-radius:var(--r-pill);border:1px solid var(--border);background:var(--sw)}
+  .looks-row.swatches button[aria-pressed="true"]{background:var(--sw);
+    border-color:var(--text);box-shadow:0 0 0 2px var(--bg),0 0 0 3px var(--sw)}
+  .swatches{justify-content:space-between;padding:0 1px}
   .quit:hover{color:var(--textDim)}
 
   .ember-dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none;transition:background .3s,box-shadow .3s}
@@ -315,6 +362,10 @@
     <nav id="nav"></nav>
     <div class="railfoot">
       <div class="ministatus"><span class="ember-dot"></span><span id="miniStatus">Asleep</span></div>
+      <div class="looks">
+        <div class="looks-row" id="roomRow" role="group" aria-label="Room"></div>
+        <div class="looks-row swatches" id="coalRow" role="group" aria-label="Coal"></div>
+      </div>
       <a class="quit" href="#" onclick="quitPanel();return false">Put the panel to bed →</a>
     </div>
   </aside>
@@ -1251,6 +1302,67 @@ el('paletteScrim').addEventListener('click',e=>{if(e.target===el('paletteScrim')
 document.addEventListener('click',e=>{const sw=el('switcher'),b=el('wmBtn');if(sw&&sw.classList.contains('show')&&!sw.contains(e.target)&&b&&!b.contains(e.target))closeSwitcher();});
 
 /* boot */
+/* ---------------- looks: which room, which coal ----------------
+   Named from the panel's own world rather than "light/dark/blue". The rooms
+   are how lit the place is; the coals are what colour the fire burns. Ember
+   is the default and the identity — the rest are moods, not rebrands. */
+const ROOMS = [
+  { id:'hearth',   label:'Hearth'   },   /* warm dark, fire lit   */
+  { id:'embers',   label:'Embers'   },   /* true black, coal only */
+  { id:'daybreak', label:'Daybreak' }    /* shutters open         */
+];
+/* Each coal carries a second, deeper pair for the light room: the dark-room
+   values wash out on paper — ember measured 4.20:1 and gold 4.30:1 as text
+   on the card before being deepened. */
+const COALS = {
+  ember:     { ember:'#E8A86B', deep:'#C8794A', lightEmber:'#9A5518', lightDeep:'#7A4110' },
+  nether:    { ember:'#E0785C', deep:'#B4503A', lightEmber:'#B24428', lightDeep:'#8A2F18' },
+  prismarine:{ ember:'#6BC2B6', deep:'#3E8F85', lightEmber:'#1F7A70', lightDeep:'#125A52' },
+  moss:      { ember:'#9DC46F', deep:'#6E9247', lightEmber:'#4C6B2A', lightDeep:'#39511E' },
+  amethyst:  { ember:'#B497DE', deep:'#8566B4', lightEmber:'#6E4CA6', lightDeep:'#523682' },
+  gold:      { ember:'#E5C158', deep:'#B8933A', lightEmber:'#7A5D14', lightDeep:'#5E470D' }
+};
+function hexToRgb(h){const n=parseInt(h.slice(1),16);return [(n>>16)&255,(n>>8)&255,n&255];}
+function looksGet(){ try{ return JSON.parse(localStorage.getItem('hearth.looks')||'{}'); }catch{ return {}; } }
+function looksSet(v){ try{ localStorage.setItem('hearth.looks', JSON.stringify(v)); }catch{} }
+function applyLooks(){
+  const L = looksGet(), room = L.room || 'hearth', coal = COALS[L.coal] ? L.coal : 'ember';
+  const r = document.documentElement;
+  if (room === 'hearth') r.removeAttribute('data-room'); else r.setAttribute('data-room', room);
+  const c = COALS[coal], light = room === 'daybreak';
+  const main = light ? c.lightEmber : c.ember, deep = light ? c.lightDeep : c.deep;
+  const [R,G,B] = hexToRgb(main);
+  r.style.setProperty('--ember', main);
+  r.style.setProperty('--emberDeep', deep);
+  r.style.setProperty('--emberGlow', `rgba(${R},${G},${B},${light ? .14 : room === 'embers' ? .2 : .16})`);
+  document.querySelectorAll('#roomRow button').forEach(b =>
+    b.setAttribute('aria-pressed', String(b.dataset.room === room)));
+  document.querySelectorAll('#coalRow button').forEach(b =>
+    b.setAttribute('aria-pressed', String(b.dataset.coal === coal)));
+}
+function buildLooks(){
+  const rr = document.getElementById('roomRow'), cr = document.getElementById('coalRow');
+  if (!rr || !cr) return;
+  rr.innerHTML=''; cr.innerHTML='';
+  for (const room of ROOMS){
+    const b=document.createElement('button');
+    b.type='button'; b.dataset.room=room.id; b.textContent=room.label;
+    b.title=room.label+' room';
+    b.onclick=()=>{ const L=looksGet(); L.room=room.id; looksSet(L); applyLooks(); };
+    rr.appendChild(b);
+  }
+  for (const [id,c] of Object.entries(COALS)){
+    const b=document.createElement('button');
+    b.type='button'; b.dataset.coal=id;
+    b.style.setProperty('--sw', c.ember);
+    b.title=id.charAt(0).toUpperCase()+id.slice(1)+' coal';
+    b.setAttribute('aria-label', b.title);
+    b.onclick=()=>{ const L=looksGet(); L.coal=id; looksSet(L); applyLooks(); };
+    cr.appendChild(b);
+  }
+  applyLooks();
+}
+buildLooks();
 buildNav();go('home');tick();
 setInterval(tick,2500);
 setInterval(()=>{if(CUR==='home'){pollLog().then(()=>{renderPeek();renderPresence();});}if(CUR==='console'){pollLog().then(renderFullLog);}if(CUR==='ai'){tickAI();}},1500);
