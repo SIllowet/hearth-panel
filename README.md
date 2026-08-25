@@ -10,8 +10,11 @@ telemetry — it's a single Python file and a single HTML file talking to each o
 on `127.0.0.1`.
 
 ```
-python app.py     →     http://127.0.0.1:8765
+double-click start-panel.bat   →   Hearth opens in its own window
 ```
+
+It is not a browser tab. Hearth gets its own window and its own button on the
+taskbar, so it minimises and closes like any other program.
 
 ---
 
@@ -29,7 +32,11 @@ python app.py     →     http://127.0.0.1:8765
 - **World icons** — the little picture next to your server in the Minecraft multiplayer list. Any image, auto-resized to 64×64.
 - **Backups** — automatic on every stop and every 2 hours (keeps the last 15), plus "Back up now" and one-click restore.
 - **An AI that lives in your server** — optional. You name it, you pick its brain (a free local model or any paid API), and it talks to players in chat and runs commands for people you trust. [Details below.](#the-ai)
-- **Public address via playit.gg** — optional. Runs the tunnel agent for you so friends outside your network can join.
+- **Public address via playit.gg** — optional. Downloads the tunnel agent for you, checks it is really playit's, and runs it alongside your world so friends outside your network can join.
+- **Tells you what is missing** — Hearth checks what it needs when it starts and explains anything absent in plain words, with a link that fixes it. It never installs anything on your behalf.
+- **Helps you pick how people join** — say who is coming, and Hearth looks at your connection and recommends playit, Tailscale or forwarding a port, with a reason. Some connections cannot forward a port at all, and it will tell you so.
+- **Its own window** — not a browser tab. Own taskbar button, and it can put a shortcut on your desktop.
+- **Updates itself** — when you ask it to. Your worlds, backups and settings are never touched. [Details below.](#keeping-it-up-to-date)
 - **A safety guard** — the panel refuses to start a world whose port is already in use. Two servers running on one world folder will overwrite each other's saves, and this stops that happening.
 
 ---
@@ -44,10 +51,15 @@ You need:
 | **Python 3.10 or newer** | [python.org/downloads](https://www.python.org/downloads/) — tick **"Add Python to PATH"** during setup. |
 | **Java** | Minecraft servers are Java programs. Match the version to your Minecraft version — modern versions need Java 21+, older ones need Java 17. [Microsoft OpenJDK](https://learn.microsoft.com/java/openjdk/download) works well. |
 | **Pillow** *(optional)* | Only needed for the world-icon feature: `pip install Pillow` |
-| **A playit.gg account** *(optional)* | Only if you want friends outside your home network to join. Free. |
+| **A playit.gg account** *(optional)* | Only if you want friends outside your home network to join. Free — and Hearth downloads the program for you. |
 | **An AI provider** *(optional)* | Only for the AI companion. [Ollama](https://ollama.com) runs free on your own PC; any paid API works too. No Python packages needed either way. |
 
 The panel itself needs no other Python packages — everything else is the standard library.
+
+**You do not have to check any of this yourself.** Hearth looks when it starts,
+and if something is missing it opens on **Setup** and tells you what and why, in
+plain words, with a link that fixes it. It never installs anything behind your
+back.
 
 ---
 
@@ -56,22 +68,25 @@ The panel itself needs no other Python packages — everything else is the stand
 1. **Get the files.**
 
    ```bash
-   git clone https://github.com/YOUR-USERNAME/hearth-panel.git
+   git clone https://github.com/SIllowet/hearth-panel.git
    ```
 
    Or download the ZIP from the green **Code** button and unzip it anywhere you like.
 
-2. **Start it.**
+2. **Start it.** Double-click **`start-panel.bat`**.
 
-   ```bash
-   python app.py
-   ```
+   It finds Python wherever it lives — you do not need to have ticked "Add Python
+   to PATH", which is what usually causes *"Python was not found"* on a PC that
+   has it installed. If Python genuinely is not there, it says so and takes you
+   to the download page.
 
-   On Windows you can just double-click **`start-panel.bat`** instead — that opens it
-   with no black console window hanging around.
+   `python app.py` works too if you prefer a terminal.
 
-3. Your browser opens at **http://127.0.0.1:8765**. On the very first run you'll see
-   *"No worlds yet"*.
+3. **Hearth opens in its own window** at `127.0.0.1:8765` — no address bar, its
+   own taskbar button. On the very first run you will see *"No worlds yet"*.
+
+4. **Optional: put it on your desktop.** Setup → *Add it to my desktop*. One
+   double-click to open it after that.
 
 To stop the panel, click **"Put the panel to bed"** at the bottom left. Any Minecraft
 world that is currently running keeps running — closing the panel does not kick your friends.
@@ -112,42 +127,59 @@ panel again and it will appear in the sidebar.
 
 ## Letting friends join
 
-There are three levels, and you probably want the third.
+There is no single right answer, and Hearth will work it out with you.
 
-**1. Just you, on this PC.** Connect to `localhost`. Nothing to set up.
+Open **Setup → Letting people in**, say who is joining, and press
+**Check my connection**. Hearth looks at your network and recommends one of the
+options below, with a reason. Two things decide it, and neither is guessable:
 
-**2. People in your house, on the same Wi-Fi.** They connect to this PC's local IP —
-run `ipconfig` and give them the IPv4 address, e.g. `192.168.1.42`. You may need to
-allow Java through Windows Firewall the first time.
+- **Some providers hand out shared addresses** (carrier-grade NAT). If yours
+  does, forwarding a port cannot work no matter what you change on the router.
+  Worth knowing before you spend an evening on it, not after.
+- **Two routers stacked** — your provider's box plus your own — means any
+  forwarding rule has to go on both, and you may not have the password for the
+  first one.
 
-**3. Friends anywhere.** Your home router blocks incoming connections, so you need a
-tunnel. This panel is built around [playit.gg](https://playit.gg), which is free and
-needs no port forwarding:
+The check runs only when you ask it to. It traces your first few routers and
+asks a public service what your address looks like from outside, which is the
+only way to find that out. Nothing is stored or sent anywhere else.
 
-1. Make a playit.gg account and download `playit.exe`.
-2. In playit.gg, create a **Minecraft Java** tunnel pointing at local port `25565`
-   (or whatever port your world uses — the Worlds tab shows it).
-3. playit gives you an address like `some-words.gl.joinmc.link`.
-4. Copy your **agent secret key** from the playit dashboard.
-5. Stop the panel and put both into `config.json`:
+**Just you, on this PC.** Connect to `localhost`. Nothing to set up.
 
-   ```json
-   "tunnel": {
-     "exe": "C:\\path\\to\\playit.exe",
-     "secret": "your-playit-agent-secret",
-     "address": "some-words.gl.joinmc.link"
-   }
-   ```
+**Everyone on your Wi-Fi.** They connect to this PC's local address, which
+Setup shows you. You may need to allow Java through Windows Firewall the first
+time.
 
-   The `secret` only needs to be on **one** server entry — that's the agent, and it
-   serves every tunnel on your account. Other worlds just need their own `address`.
-6. Start the panel. On the Home tab, **"Open it"** starts the tunnel; the address
-   becomes a tap-to-copy button to hand to your friends.
+**A few friends, regularly.** [Tailscale](https://tailscale.com/download) puts
+you and them on one private network, as though you were in the same house.
+Nothing is exposed to the internet and your home address stays private.
+Everyone installs one small app, so it suits a regular group rather than
+strangers.
+
+**Anyone you send the address to.** A tunnel is the option that works on every
+connection, including the ones that cannot forward a port.
+[playit.gg](https://playit.gg) is free and needs no router changes:
+
+1. In Setup, press **Get it for me**. Hearth downloads the agent from playit's
+   own signed release and checks the signature before keeping it. About 4 MB,
+   saved next to Hearth.
+2. Make a playit.gg account, add an agent, and copy its **secret key**.
+3. Paste the key into the box in Setup and press **Save**. Hearth writes it into
+   your settings — there is no config file to edit.
+4. Light the hearth in **Worlds**. The tunnel starts with your world, and the
+   address becomes a tap-to-copy button to hand to your friends.
+
+**Forwarding a port yourself.** No third party involved, but it is the most
+fiddly option and it publishes your home address to everyone who joins. Send
+port `25565` to this PC in your router's settings — on *both* routers if you
+have two — and allow Java through Windows Firewall. Most home connections
+change address every so often, so whatever you hand out will stop working
+eventually unless you add a free dynamic DNS service.
 
 ### Tunnel bank
 
 If you run several worlds, pre-make a batch of tunnels on playit.gg and paste them
-into **Worlds → 🎟️ Tunnel bank**, one per line:
+into **Worlds → Tunnel bank**, one per line:
 
 ```
 25565  world-one.gl.joinmc.link
@@ -401,6 +433,24 @@ when the newest release isn't a `1.21.x`.
 
 ---
 
+## Keeping it up to date
+
+Hearth checks for a new version and, if you want it, fetches it for you. Open
+**Setup → Updates**.
+
+The new copy is put aside and swapped in the next time you start Hearth — the
+running program has its own files open, so they cannot be replaced underneath
+it. The swap takes about a second.
+
+**Only Hearth's own files are replaced.** Your worlds, backups, `config.json`,
+your playit secret and your AI key are never touched. The version it replaced is
+kept in `.update/` so you can put it back by hand if something looks wrong.
+
+If you would rather not have it check at all, you are welcome to ignore the
+card — nothing downloads unless you press the button.
+
+---
+
 ## Backups
 
 Every world is zipped to `<server folder>\backups\`:
@@ -451,9 +501,19 @@ not set, or the port already taken.
 listening on that port, usually a server that's still running from before. Hit **Stop**
 first (the panel can stop orphaned servers too), then start it again.
 
-**Java not found** — the panel looks for `C:\Program Files\Microsoft\jdk-*` first, then
-falls back to whatever `java` is on your PATH. If you installed Java elsewhere, make sure
-`java -version` works in a terminal.
+**"Python was not found"** — usually Python *is* installed, but the
+*"Add Python to PATH"* box was never ticked. `start-panel.bat` checks the usual
+install folders and the `py` launcher as well as PATH, so try that before
+reinstalling anything.
+
+**Java not found** — Setup tells you if Java is missing or too old, and links to
+the right download. The panel looks in the Microsoft, Adoptium, Zulu and Oracle
+install folders and then on your PATH. If you put Java somewhere unusual, make
+sure `java -version` works in a terminal.
+
+**Hearth opened in my browser instead of its own window** — it uses Edge or
+Chrome's app mode for that, so if neither is installed it falls back to your
+normal browser. Everything still works; it is just a tab.
 
 **Icons don't work** — install Pillow: `pip install Pillow`.
 
