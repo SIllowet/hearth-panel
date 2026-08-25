@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.3.0
+
+- **Hearth fetches playit for you.** One button. It comes from playit's own
+  signed release, and Hearth checks the signature before keeping it — if it is
+  not signed by playit, it is thrown away.
+- **No more editing config.json by hand.** Paste your playit secret into the
+  box in Setup and Hearth saves it for you. That was the fiddliest step in the
+  whole setup and it is gone.
+- Setting up playit is now three plain steps that tick themselves off as you
+  go, instead of a wall of instructions.
+
 ## 1.2.0
 
 - **Hearth now helps you pick how people join.** Tell it who is coming — your

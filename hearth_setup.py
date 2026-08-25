@@ -15,7 +15,7 @@ Two jobs, both deliberately boring:
 Standard library only, like the rest of the panel. No pip install.
 """
 
-import json, os, re, shutil, socket, subprocess, sys, time, glob
+import json, os, re, shutil, socket, subprocess, sys, threading, time, glob
 import urllib.request, urllib.error, zipfile, io
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -638,3 +638,97 @@ def recommend_for(verdict, have, audience='anyone'):
     return {"pick": "playit",
             "because": "It works on the widest range of connections.",
             "alt": None}
+
+
+# ------------------------------------------------------------ getting playit
+# Hearth already downloads Minecraft server jars from Mojang, Paper and Fabric.
+# The tunnel agent is the same kind of thing: one portable file that lives in
+# this folder, from the vendor's own signed release. Nothing is installed into
+# Windows, and deleting the file undoes it completely.
+PLAYIT_RELEASE = "https://api.github.com/repos/playit-cloud/playit-agent/releases/latest"
+PLAYIT_ASSET = "playit-windows-x86_64-signed.exe"
+PLAYIT_MIN_BYTES = 1_000_000
+
+
+def playit_path():
+    return os.path.join(BASE, 'playit.exe')
+
+
+def playit_status():
+    p = playit_path()
+    return {"exists": os.path.exists(p),
+            "path": p,
+            "size": os.path.getsize(p) if os.path.exists(p) else 0}
+
+
+def fetch_playit(timeout=120):
+    """Download the signed agent from playit's own GitHub release."""
+    if os.path.exists(playit_path()):
+        return {"ok": True, "msg": "playit is already here."}
+    try:
+        rel = json.loads(_get(PLAYIT_RELEASE, 15).decode('utf-8'))
+    except Exception:
+        return {"ok": False, "msg": "Could not reach playit's download page. "
+                                    "Check your connection, or grab it yourself "
+                                    "from playit.gg."}
+    url = ''
+    for a in rel.get('assets', []):
+        if a.get('name') == PLAYIT_ASSET:
+            url = a.get('browser_download_url', '')
+            break
+    if not url:
+        return {"ok": False, "msg": "playit changed how they publish downloads. "
+                                    "Grab it from playit.gg for now."}
+    try:
+        blob = _get(url, timeout)
+    except Exception:
+        return {"ok": False, "msg": "The download did not finish. Try again."}
+    if len(blob) < PLAYIT_MIN_BYTES or blob[:2] != b'MZ':
+        # MZ is the first two bytes of every Windows program. Anything else
+        # means we were handed an error page, not the agent.
+        return {"ok": False, "msg": "What came back was not the playit program. "
+                                    "Nothing was saved."}
+    tmp = playit_path() + '.part'
+    try:
+        with open(tmp, 'wb') as f:
+            f.write(blob)
+    except Exception as e:
+        try: os.remove(tmp)
+        except Exception: pass
+        return {"ok": False, "msg": "Could not save it (%s)." % str(e)[:70]}
+
+    # Windows can tell us whether this really is playit's signed program and
+    # not something that got swapped in on the way here. If the signature does
+    # not check out we throw it away rather than keep it.
+    signer = _signature_of(tmp)
+    if signer is not None and 'developed methods' not in signer.lower():
+        try: os.remove(tmp)
+        except Exception: pass
+        return {"ok": False, "msg": "That download was not signed by playit, so "
+                                    "Hearth threw it away. Get it from playit.gg "
+                                    "yourself if this keeps happening."}
+    try:
+        os.replace(tmp, playit_path())
+    except Exception as e:
+        return {"ok": False, "msg": "Could not save it (%s)." % str(e)[:70]}
+    return {"ok": True, "version": rel.get('tag_name', ''), "signer": signer,
+            "msg": "playit is ready. Next, link it to a playit account."}
+
+
+def _signature_of(path):
+    """Who signed this program? None if Windows cannot tell us (not Windows,
+    PowerShell missing) - in that case we do not block the download."""
+    if os.name != 'nt':
+        return None
+    ps = ("$s=Get-AuthenticodeSignature -LiteralPath '%s';"
+          "if($s.Status -eq 'Valid'){$s.SignerCertificate.Subject}else{'INVALID'}") % path
+    try:
+        out = subprocess.run(['powershell', '-NoProfile', '-NonInteractive',
+                              '-Command', ps], capture_output=True, text=True,
+                             timeout=25, creationflags=NO_WINDOW)
+    except Exception:
+        return None
+    txt = (out.stdout or '').strip()
+    if not txt:
+        return None
+    return txt

@@ -231,6 +231,31 @@ def account_tunnel():
             return t
     return None
 
+def set_tunnel_secret(secret, name=None):
+    """
+    Save a playit agent secret without anyone opening config.json in Notepad.
+    Hand-editing that file - stop the panel, mind the double backslashes - was
+    the single fiddliest step in setting Hearth up.
+    """
+    secret = (secret or '').strip()
+    if len(secret) < 20 or not re.match(r'^[A-Za-z0-9+/=_-]+$', secret):
+        return False, ("That does not look like a playit secret. It is a long "
+                       "line of letters and numbers from your playit account.")
+    exe = os.path.join(BASE, 'playit.exe')
+    if not os.path.exists(exe):
+        exe = (account_tunnel() or {}).get('exe', '')
+    targets = [t for t in CONFIG.get('servers', []) if not name or t.get('name') == name]
+    if not targets:
+        return False, "Make a world first, then Hearth knows where to put this."
+    for srv in targets:
+        t = srv.get('tunnel') or {}
+        t['secret'] = secret
+        if exe:
+            t['exe'] = exe
+        srv['tunnel'] = t
+    save_config(CONFIG)
+    return True, "Saved. Light the hearth and the tunnel starts with it."
+
 def playit_proc_running():
     try:
         out = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq playit.exe'],
@@ -1249,6 +1274,12 @@ class Handler(BaseHTTPRequestHandler):
             if not hearth_setup:
                 self._send(200, {"exists": False}); return
             self._send(200, hearth_setup.shortcut_status()); return
+        if path == '/api/playit':
+            if not hearth_setup:
+                self._send(200, {"exists": False}); return
+            st = hearth_setup.playit_status()
+            st["linked"] = bool(account_tunnel())
+            self._send(200, st); return
         if path == '/api/network':
             if not hearth_setup:
                 self._send(200, {"ran": False}); return
@@ -1330,6 +1361,15 @@ class Handler(BaseHTTPRequestHandler):
             if not hearth_setup:
                 self._send(200, {"ok": False, "msg": "unavailable"}); return
             self._send(200, hearth_setup.make_shortcut()); return
+        if path == '/api/playit/get':
+            if not hearth_setup:
+                self._send(200, {"ok": False, "msg": "unavailable"}); return
+            self._send(200, hearth_setup.fetch_playit()); return
+        if path == '/api/playit/secret':
+            # do_POST already read the body into b - reading it again would
+            # block forever waiting for bytes that were consumed.
+            ok, msg = set_tunnel_secret(b.get('secret', ''), b.get('name'))
+            self._send(200, {"ok": ok, "msg": msg}); return
         if path == '/api/update/stage':
             if not hearth_setup:
                 self._send(200, {"ok": False, "msg": "updates unavailable"}); return

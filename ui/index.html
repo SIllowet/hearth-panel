@@ -400,6 +400,16 @@
 .waybody ol{padding-left:19px;margin:9px 0}
 .waybody li{margin:5px 0}
 .waybody code{background:var(--bg2,rgba(255,255,255,.05));padding:1px 5px;border-radius:5px;font-size:12.5px}
+
+.steps{margin:11px 0 0;padding-left:19px;color:var(--muted);font-size:13.5px;line-height:1.6}
+.steps li{margin:9px 0}
+.steps li b{color:var(--text)}
+.steps li.done{opacity:.6}
+.steps li.done b{color:var(--muted)}
+.stepdone{color:var(--good,#7fb069);font-size:13.5px;margin-top:10px}
+.inp{background:var(--bg2,rgba(255,255,255,.04));border:1px solid var(--border);
+  border-radius:var(--r-ctrl);color:var(--text);padding:7px 11px;font:inherit;font-size:13px}
+.inp:focus{outline:none;border-color:var(--ember)}
 </style>
 </head>
 <body>
@@ -481,6 +491,7 @@ async function loadSetup(){
   try{ DOC=await api('/api/doctor'); }catch(e){ DOC=null; }
   renderSetup();
   try{ SHORTCUT=await api('/api/shortcut'); }catch(e){ SHORTCUT=null; }
+  await loadPlayit();
   renderSetup();
   try{ UPD=await api('/api/update/check'); }catch(e){ UPD=null; }
   renderSetup();
@@ -571,10 +582,7 @@ const WAYS={
   playit:{t:'playit tunnel', tag:'works on any connection',
     body:`<p>playit gives your world an address like <code>example.playit.gg</code>
       that anyone can join from anywhere. Nothing to change on your router, and
-      your home address stays private — people connect to playit, not to you.</p>
-      <ol><li>Download <code>playit.exe</code> and put it in your Hearth folder.</li>
-      <li>Open Worlds and light the hearth. Hearth starts the tunnel with it.</li>
-      <li>Send the address it shows you to your friends.</li></ol>`,
+      your home address stays private — people connect to playit, not to you.</p>`,
     link:['Get playit','https://playit.gg/download']},
   tailscale:{t:'Tailscale', tag:'private, nothing exposed',
     body:`<p>Tailscale puts you and your friends on one private network, as though
@@ -623,8 +631,71 @@ function wayBlock(key, recommended, reason){
     </div>
     ${reason?`<p class="wayreason">${esc(reason)}</p>`:''}
     <div class="waybody">${w.body}</div>
-    ${link?`<div class="row" style="margin-top:9px">${link}</div>`:''}
+    ${key==='playit'?playitSteps():''}
+    ${(link&&key!=='playit')?`<div class="row" style="margin-top:9px">${link}</div>`:''}
   </div>`;
+}
+
+let PLAYIT=null;
+
+async function loadPlayit(){
+  try{ PLAYIT=await api('/api/playit'); }catch(e){ PLAYIT=null; }
+}
+
+async function getPlayit(){
+  const b=el('pgBtn'); if(b){b.disabled=true;b.textContent='Downloading…';}
+  let r; try{ r=await api('/api/playit/get','POST',{}); }
+  catch(e){ r={ok:false,msg:'The download did not finish.'}; }
+  toast(r.msg||'');
+  await loadPlayit(); renderSetup();
+}
+
+async function savePlayitSecret(){
+  const i=el('pgSecret'); if(!i) return;
+  const b=el('pgSave'); if(b){b.disabled=true;b.textContent='Saving…';}
+  let r; try{ r=await api('/api/playit/secret','POST',{secret:i.value}); }
+  catch(e){ r={ok:false,msg:'Could not save that.'}; }
+  toast(r.msg||'');
+  await loadPlayit(); renderSetup();
+}
+
+/* playit needs two things: the program, and a secret that ties it to your
+   playit account. Hearth can fetch the program itself. The secret has to come
+   from you, but it should not mean editing a config file by hand. */
+function playitSteps(){
+  const have = PLAYIT && PLAYIT.exists;
+  const linked = PLAYIT && PLAYIT.linked;
+  if(have && linked){
+    return `<p class="stepdone">playit is set up. Light the hearth in Worlds and
+      the tunnel starts with it &mdash; then send people the address it shows.</p>`;
+  }
+  const step1 = have
+    ? `<li class="done"><b>The playit program</b> &mdash; here already.</li>`
+    : `<li><b>Get the playit program.</b> Hearth downloads it straight from
+        playit's own signed release and checks the signature before keeping it.
+        <div class="row" style="margin-top:8px">
+          <button class="btn sm" id="pgBtn" onclick="getPlayit()">Get it for me</button>
+          <span class="fixnote">about 4 MB, saved next to Hearth</span>
+        </div></li>`;
+  const step2 = linked
+    ? `<li class="done"><b>Linked to your playit account.</b></li>`
+    : `<li><b>Link it to a playit account.</b> Make one at playit.gg, add an
+        agent, and copy its secret key.
+        <div class="row" style="margin-top:8px;gap:7px;flex-wrap:wrap">
+          <a class="btn sm ghost" href="https://playit.gg/account/agents"
+             target="_blank" rel="noopener">Open playit.gg</a>
+        </div>
+        <div class="row" style="margin-top:8px;gap:7px">
+          <input id="pgSecret" class="inp" placeholder="paste the secret key here"
+                 spellcheck="false" autocomplete="off" style="flex:1;min-width:180px">
+          <button class="btn sm" id="pgSave" onclick="savePlayitSecret()">Save</button>
+        </div>
+        <span class="fixnote">Hearth writes it into your settings for you &mdash;
+        no config file to edit.</span></li>`;
+  const step3 = `<li${(have&&linked)?' class="done"':''}><b>Light the hearth.</b>
+        Hearth starts the tunnel with your world and shows you the address to
+        pass on.</li>`;
+  return `<ol class="steps">${step1}${step2}${step3}</ol>`;
 }
 
 function shareCard(){

@@ -25,3 +25,6 @@ backups/
 
 # Browser profile for the app window
 .window/
+
+# The tunnel agent is downloaded, never committed
+playit.exe
