@@ -1245,6 +1245,10 @@ class Handler(BaseHTTPRequestHandler):
             if not hearth_setup:
                 self._send(200, {"ok": False, "msg": "updates unavailable"}); return
             self._send(200, hearth_setup.check_update()); return
+        if path == '/api/shortcut':
+            if not hearth_setup:
+                self._send(200, {"exists": False}); return
+            self._send(200, hearth_setup.shortcut_status()); return
         if path == '/api/mods/browse':
             self._send(200, browse_mods(q.get('name', ''), q.get('source', 'modrinth'),
                                         q.get('q', ''), q.get('page', 0) or 0)); return
@@ -1317,6 +1321,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/server/setactive':
             CONFIG['active'] = name; save_config(CONFIG)
             self._send(200, {"ok": True, "msg": "Active server: " + name}); return
+        if path == '/api/shortcut':
+            if not hearth_setup:
+                self._send(200, {"ok": False, "msg": "unavailable"}); return
+            self._send(200, hearth_setup.make_shortcut()); return
         if path == '/api/update/stage':
             if not hearth_setup:
                 self._send(200, {"ok": False, "msg": "updates unavailable"}); return
@@ -1346,16 +1354,24 @@ def main():
     try:
         httpd = ThreadingHTTPServer((HOST, PORT), Handler)
     except OSError:
-        # panel already running on this port -> just open the browser to it and exit
+        # panel already running on this port -> just open a window onto it and exit
         if not os.environ.get('HEARTH_NO_OPEN'):
-            try: webbrowser.open(url)
-            except Exception: pass
+            try:
+                if hearth_setup:
+                    hearth_setup.open_app_window(url)
+                else:
+                    webbrowser.open(url)
+            except Exception:
+                pass
         return
     print("Hearth Control Panel running at " + url)
     threading.Thread(target=periodic_backups, daemon=True).start()
     if not os.environ.get('HEARTH_NO_OPEN'):
         try:
-            webbrowser.open(url)
+            if hearth_setup:
+                hearth_setup.open_app_window(url)
+            else:
+                webbrowser.open(url)
         except Exception:
             pass
     httpd.serve_forever()

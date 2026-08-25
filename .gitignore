@@ -22,3 +22,6 @@ backups/
 
 # Local safety backups made before edits
 *.bak-*
+
+# Browser profile for the app window
+.window/

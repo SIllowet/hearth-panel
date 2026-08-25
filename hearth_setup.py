@@ -349,3 +349,113 @@ def apply_staged():
         pass
     return "Updated to %s (%d files). The previous version is in .update/ if " \
            "anything looks wrong." % (mark.get("version", "?"), replaced)
+
+
+# ------------------------------------------------------------- app window
+# Hearth is a web app, but it should not feel like a browser tab. Edge and
+# Chrome both have an "app mode" that opens a plain window with no address bar,
+# its own taskbar button, and its own icon - so it minimises, alt-tabs and
+# closes like any other program. Edge ships with Windows, so this works out of
+# the box; if neither is here we fall back to the normal browser.
+BROWSERS = [
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+]
+
+
+def _app_browser():
+    for b in BROWSERS:
+        if os.path.exists(b):
+            return b
+    for name in ('msedge', 'chrome'):
+        p = shutil.which(name)
+        if p:
+            return p
+    return None
+
+
+def open_app_window(url, width=1280, height=880):
+    """Open Hearth in its own window. Returns True if app mode was used."""
+    exe = _app_browser()
+    if exe:
+        # A separate profile folder keeps this window out of the user's normal
+        # browsing session, so closing their browser never closes Hearth.
+        prof = os.path.join(BASE, '.window')
+        try:
+            subprocess.Popen(
+                [exe, '--app=%s' % url,
+                 '--window-size=%d,%d' % (width, height),
+                 '--user-data-dir=%s' % prof,
+                 '--no-first-run', '--no-default-browser-check'],
+                creationflags=NO_WINDOW)
+            return True
+        except Exception:
+            pass
+    try:
+        import webbrowser
+        webbrowser.open(url)
+    except Exception:
+        pass
+    return False
+
+
+# -------------------------------------------------------------- shortcut
+def _desktop():
+    for p in (os.path.join(os.path.expanduser('~'), 'Desktop'),
+              os.path.join(os.environ.get('USERPROFILE', ''), 'OneDrive', 'Desktop')):
+        if os.path.isdir(p):
+            return p
+    return os.path.join(os.path.expanduser('~'), 'Desktop')
+
+
+def shortcut_path():
+    return os.path.join(_desktop(), 'Hearth.lnk')
+
+
+def shortcut_status():
+    return {"exists": os.path.exists(shortcut_path()), "path": shortcut_path()}
+
+
+def make_shortcut():
+    """
+    Put a Hearth icon on the desktop. Uses pythonw so double-clicking it opens
+    the panel with no console window behind it.
+    """
+    if os.name != 'nt':
+        return {"ok": False, "msg": "Shortcuts are a Windows thing."}
+    exe = sys.executable or ''
+    # prefer pythonw so no black console window appears
+    if exe.lower().endswith('python.exe'):
+        w = exe[:-len('python.exe')] + 'pythonw.exe'
+        if os.path.exists(w):
+            exe = w
+    if not exe or not os.path.exists(exe):
+        return {"ok": False, "msg": "Could not work out which Python to point at."}
+    target = os.path.join(BASE, 'app.py')
+    icon = os.path.join(BASE, 'hearth.ico')
+    lnk = shortcut_path()
+    ps = (
+        "$s=(New-Object -COM WScript.Shell).CreateShortcut('%s');"
+        "$s.TargetPath='%s';"
+        "$s.Arguments='\"%s\"';"
+        "$s.WorkingDirectory='%s';"
+        "$s.Description='Hearth - your Minecraft server panel';"
+        "%s"
+        "$s.Save()"
+    ) % (lnk, exe, target, BASE,
+         ("$s.IconLocation='%s,0';" % icon) if os.path.exists(icon) else "")
+    try:
+        p = subprocess.run(['powershell', '-NoProfile', '-NonInteractive',
+                            '-Command', ps],
+                           capture_output=True, text=True, timeout=20,
+                           creationflags=NO_WINDOW)
+    except Exception as e:
+        return {"ok": False, "msg": "Windows would not make the shortcut (%s)."
+                                    % str(e)[:70]}
+    if not os.path.exists(lnk):
+        err = (p.stderr or '').strip().splitlines()
+        return {"ok": False, "msg": "Windows would not make the shortcut. %s"
+                                    % (err[0][:110] if err else '')}
+    return {"ok": True, "path": lnk, "msg": "Added Hearth to your desktop."}

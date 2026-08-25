@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.0
+
+- **Hearth opens in its own window.** No address bar, no browser tab. It gets
+  its own button on the taskbar, so it minimises, alt-tabs and closes like any
+  other program. Closing your browser no longer closes Hearth.
+- **Desktop shortcut.** Setup can put Hearth on your desktop for you, with its
+  own icon. One double-click to open it.
+- Hearth now has an icon.
+
 ## 1.0.0
 
 First tracked version.

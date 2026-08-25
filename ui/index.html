@@ -4,6 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Hearth · Minecraft Server Control</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2064%2064%27%3E%3Crect%20width%3D%2764%27%20height%3D%2764%27%20rx%3D%2714%27%20fill%3D%27%2317130F%27%2F%3E%3Cpath%20fill%3D%27%23E8A86B%27%20d%3D%27M34.2%208c1.1%207.2%205.6%2010.6%209.1%2015.1%203.2%204.1%204.7%208.2%204.7%2012.6a15.9%2015.9%200%200%201-31.9%200c0-4.6%201.9-8.6%205.2-12.1-.4%203.6.5%206.4%202.6%208.3C25%2022.9%2028.6%2015.2%2034.2%208z%27%2F%3E%3Cpath%20fill%3D%27%2317130F%27%20opacity%3D%27.55%27%20d%3D%27M32.4%2035.6c.5%203.2%202.4%204.8%204%206.9%201.4%201.9%202.1%203.7%202.1%205.7a6.9%206.9%200%200%201-13.9%200c0-2.1.9-3.9%202.4-5.5-.2%201.6.2%202.9%201.2%203.8.2-3.9%201.8-8%204.2-10.9z%27%2F%3E%3C%2Fsvg%3E">
 <style>
   /* ---------------------------------------------------------------------
      Three rooms, one hearth. The panel is named for a fireplace and its
@@ -440,7 +441,7 @@ function buildNav(){el('nav').innerHTML=TABS.map(([k,l])=>`<button data-k="${k}"
 function go(k){CUR=k;document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.k===k));render();}
 
 /* ---------------- setup: what's missing, updates, sharing ---------------- */
-let DOC=null, UPD=null, SHARE='playit';
+let DOC=null, UPD=null, SHARE='playit', SHORTCUT=null;
 
 function viewSetupShell(){return `<h1 class="page-h">Setup</h1>
   <p class="page-sub">What Hearth needs, and how to let friends in.</p>
@@ -449,6 +450,8 @@ function viewSetupShell(){return `<h1 class="page-h">Setup</h1>
 async function loadSetup(){
   const body=el('setupBody'); if(!body) return;
   try{ DOC=await api('/api/doctor'); }catch(e){ DOC=null; }
+  renderSetup();
+  try{ SHORTCUT=await api('/api/shortcut'); }catch(e){ SHORTCUT=null; }
   renderSetup();
   try{ UPD=await api('/api/update/check'); }catch(e){ UPD=null; }
   renderSetup();
@@ -572,10 +575,31 @@ function shareCard(){
     ${link?`<div class="row" style="margin-top:10px">${link}</div>`:''}</div>`;
 }
 
+function shortcutCard(){
+  if(SHORTCUT && SHORTCUT.exists){
+    return `<div class="card"><h3>Desktop shortcut</h3>
+      <p class="muted">Hearth is on your desktop. Double-click it any time.</p></div>`;
+  }
+  return `<div class="card"><h3>Desktop shortcut</h3>
+    <p>Want Hearth on your desktop? One click to open it, no folder digging.</p>
+    <div class="row" style="margin-top:11px">
+      <button class="btn" id="scBtn" onclick="addShortcut()">Add it to my desktop</button>
+    </div></div>`;
+}
+
+async function addShortcut(){
+  const b=el('scBtn'); if(b){b.disabled=true;b.textContent='Adding…';}
+  let r; try{ r=await api('/api/shortcut','POST',{}); }
+  catch(e){ r={ok:false,msg:'Windows would not make the shortcut.'}; }
+  toast(r.msg||'');
+  try{ SHORTCUT=await api('/api/shortcut'); }catch(e){}
+  renderSetup();
+}
+
 function renderSetup(){
   const body=el('setupBody'); if(!body) return;
   if(!DOC){ body.innerHTML=`<div class="card"><p class="muted">Could not run the
-    setup checks. The panel still works.</p></div>`+updateCard()+shareCard(); return; }
+    setup checks. The panel still works.</p></div>`+shortcutCard()+updateCard()+shareCard(); return; }
   const head = DOC.ready
     ? `<div class="okbanner">Everything Hearth needs is here.${DOC.suggestions?
         ` There ${DOC.suggestions===1?'is':'are'} ${DOC.suggestions} optional thing${DOC.suggestions===1?'':'s'} below.`:''}</div>`
@@ -583,7 +607,7 @@ function renderSetup(){
         sorting before Hearth can run a world. Each one below says what to do.</div>`;
   body.innerHTML = head
     + `<div class="card"><h3>What Hearth needs</h3>${DOC.checks.map(checkRow).join('')}</div>`
-    + updateCard() + shareCard();
+    + shortcutCard() + updateCard() + shareCard();
 }
 
 /* ---------------- presence + log parsing ---------------- */
