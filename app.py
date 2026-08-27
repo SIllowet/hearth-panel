@@ -790,14 +790,21 @@ def _put_jar(d, filename, url):
     if not fn.lower().endswith('.jar'):
         fn += '.jar'
     stem, replaced = _stem(fn), None
+    # Download first, and only then clear the older build out of the way. The
+    # other order loses a working mod whenever the download drops halfway.
+    tmp = os.path.join(d, fn + '.part')
+    try:
+        _download(url, tmp)
+    except Exception:
+        try: os.remove(tmp)
+        except Exception: pass
+        raise
     for old in os.listdir(d):
         if old.lower().endswith('.jar') and old != fn and _stem(old) == stem:
             try:
                 os.remove(os.path.join(d, old)); replaced = old
             except Exception:
                 pass
-    tmp = os.path.join(d, fn + '.part')
-    _download(url, tmp)
     os.replace(tmp, os.path.join(d, fn))
     return fn, replaced
 

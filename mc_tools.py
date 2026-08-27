@@ -423,6 +423,10 @@ def check(cmd, disabled=None):
     cmd = (cmd or "").strip().lstrip("/").strip()
     if not cmd:
         return False, "", "empty command"
+    if "\n" in cmd or "\r" in cmd:
+        # The console reads a line at a time, so a newline here would be a
+        # second command riding along behind an approved one.
+        return False, "", "one command at a time"
     head = cmd.split()[0].lower()
     name = resolve(head)
     if not name:

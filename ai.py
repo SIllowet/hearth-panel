@@ -382,11 +382,21 @@ class ServerAI:
             return False, cmd, "'%s' is on the blocked list" % head
         inner = ""
         if head == 'execute':
-            tail = cmd.lower().split(' run ', 1)
-            if len(tail) > 1 and tail[1].strip():
-                inner = tail[1].strip()
+            # /execute runs another command after 'run' - and that command is
+            # allowed to be another /execute. Peeling one layer only checks the
+            # first: 'execute ... run execute ... run stop' would sail through.
+            # Keep peeling until what is left is not another /execute.
+            rest = cmd.lower()
+            for _ in range(12):
+                parts = rest.split(' run ', 1)
+                if len(parts) < 2 or not parts[1].strip():
+                    break
+                rest = parts[1].strip()
+                inner = rest
                 if inner.split()[0] in self.blocked_set():
                     return False, cmd, "that hides a blocked command inside /execute"
+                if not rest.startswith('execute'):
+                    break
         # The toolbelt. Without it the model writes plausible-looking commands
         # from memory and the console is where you find out they don't exist.
         if mc_tools and self.cfg.get("restrict_to_tools", True):
