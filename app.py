@@ -72,16 +72,22 @@ class ManagedProc:
         self.p = None
         self.log = deque(maxlen=500)
         self.ready = False
+        # Held while launching. The panel serves requests on threads, so a
+        # double-click on Start arrives as two requests at once - without this
+        # both would look at a stopped world and both would launch a jar.
+        self.lock = threading.Lock()
     def running(self):
         return self.p is not None and self.p.poll() is None
 
 SERVERS = {}      # name -> ManagedProc (minecraft)
+_procs_lock = threading.Lock()
 TUNNEL = ManagedProc()
 
 def proc_for(name):
-    if name not in SERVERS:
-        SERVERS[name] = ManagedProc()
-    return SERVERS[name]
+    with _procs_lock:
+        if name not in SERVERS:
+            SERVERS[name] = ManagedProc()
+        return SERVERS[name]
 
 def find_java():
     cands = sorted(glob.glob(r"C:\Program Files\Microsoft\jdk-*"))
@@ -142,26 +148,32 @@ def start_server(name):
     if not s:
         return False, "Server not found."
     mp = proc_for(name)
-    if mp.running():
-        return True, "Already running."
-    sport = read_properties(name).get('server-port')
-    if sport and port_listening(sport):
-        return False, "BLOCKED: port " + sport + " is already in use — a server is already running on this world. Refusing to launch a second one (that's what wiped the world before)."
-    path = s['path']
-    jar = os.path.join(path, 'server.jar')
-    if not os.path.exists(jar):
-        return False, "server.jar missing in " + path
-    java = find_java()
-    mem = CONFIG.get('memory') or {}
-    args = [java, '-Xms' + str(mem.get('min', '2G')), '-Xmx' + str(mem.get('max', '4G')),
-            '-XX:+UseG1GC', '-jar', 'server.jar', 'nogui']
-    mp.log.clear(); mp.ready = False
-    try:
-        mp.p = subprocess.Popen(args, cwd=path, stdin=subprocess.PIPE,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, bufsize=1, creationflags=NO_WINDOW)
-    except Exception as e:
-        return False, "Failed to start: " + str(e)
+    # Everything from "is it running?" to the jar actually being launched has to
+    # happen as one step. A second request that squeezed in between would see a
+    # stopped world and launch a second jar onto the same save - that is what
+    # wiped a world before, and the port check below is too slow to catch it
+    # (the first jar takes seconds to bind).
+    with mp.lock:
+        if mp.running():
+            return True, "Already running."
+        sport = read_properties(name).get('server-port')
+        if sport and port_listening(sport):
+            return False, "BLOCKED: port " + sport + " is already in use — a server is already running on this world. Refusing to launch a second one (that's what wiped the world before)."
+        path = s['path']
+        jar = os.path.join(path, 'server.jar')
+        if not os.path.exists(jar):
+            return False, "server.jar missing in " + path
+        java = find_java()
+        mem = CONFIG.get('memory') or {}
+        args = [java, '-Xms' + str(mem.get('min', '2G')), '-Xmx' + str(mem.get('max', '4G')),
+                '-XX:+UseG1GC', '-jar', 'server.jar', 'nogui']
+        mp.log.clear(); mp.ready = False
+        try:
+            mp.p = subprocess.Popen(args, cwd=path, stdin=subprocess.PIPE,
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    text=True, bufsize=1, creationflags=NO_WINDOW)
+        except Exception as e:
+            return False, "Failed to start: " + str(e)
     watcher = attach_ai(name, mp)
     threading.Thread(target=_reader, args=(mp, mp.p.stdout, watcher), daemon=True).start()
     return True, "Starting " + name + "..."
@@ -325,7 +337,12 @@ def write_properties(name, updates):
     path = os.path.join(s['path'], 'server.properties')
     props = read_properties(name)
     for k, v in updates.items():
-        props[k] = v
+        # One setting per line, always. A newline pasted into a free-text field
+        # like the MOTD would otherwise land as further settings of its own.
+        k = str(k).strip()
+        if not k or not re.match(r'^[A-Za-z0-9._\-]+$', k):
+            continue
+        props[k] = re.sub(r'[\r\n]+', ' ', str(v))
     lines = ["#Minecraft server properties", "#Edited by Hearth Control Panel"]
     for k in sorted(props.keys()):
         lines.append(k + '=' + str(props[k]))
@@ -1073,15 +1090,30 @@ def restore_backup(name, fname):
         return False, "Backup not found."
     level = read_properties(name).get('level-name', 'world')
     world = os.path.join(s['path'], level)
+    kept = ''
     if os.path.isdir(world):
         ts = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-        os.rename(world, os.path.join(s['path'], '%s_prerestore_%s' % (level, ts)))
+        kept = os.path.join(s['path'], '%s_prerestore_%s' % (level, ts))
+        os.rename(world, kept)
+
+    def put_it_back(msg):
+        # The world was moved aside a moment ago and the restore did not work.
+        # Put it back under its own name - otherwise the next start would find
+        # no world folder and generate a brand new empty one over the top.
+        if kept and not os.path.isdir(world):
+            try:
+                os.rename(kept, world)
+            except Exception:
+                return False, msg + " Your old world is still safe, saved as '%s'." % os.path.basename(kept)
+        return False, msg + " Your world is untouched."
+
     try:
-        zipfile.ZipFile(zip_path).extractall(s['path'])
+        with zipfile.ZipFile(zip_path) as z:      # closed here - Windows keeps
+            z.extractall(s['path'])               # the file locked otherwise
     except Exception as e:
-        return False, "Restore failed: " + str(e)
+        return put_it_back("Restore failed: %s." % e)
     if not os.path.isdir(world):
-        return False, "That backup didn't contain a world folder."
+        return put_it_back("That backup didn't contain a world folder.")
     return True, "Restored '%s'. Start the server to load it." % fname
 
 def periodic_backups():
