@@ -618,8 +618,10 @@ def delete_server(name):
     if name in (CONFIG.get('protected') or []):
         return False, "'" + name + "' is protected from deletion (listed in config.json -> protected)."
     CONFIG['servers'] = [x for x in CONFIG['servers'] if x['name'] != name]
-    if CONFIG.get('active') == name and CONFIG['servers']:
-        CONFIG['active'] = CONFIG['servers'][0]['name']
+    if CONFIG.get('active') == name:
+        # Move to whatever is left, or nothing at all - never leave the panel
+        # pointing at the world we just removed.
+        CONFIG['active'] = CONFIG['servers'][0]['name'] if CONFIG['servers'] else None
     save_config(CONFIG)
     return True, "Removed '" + name + "' from the panel (files left on disk for safety)."
 
@@ -1355,6 +1357,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, {"ok": False, "msg": "unknown endpoint"}); return
             self._send(200, {"ok": ok, "msg": msg}); return
         if path == '/api/server/setactive':
+            # Only ever point at a world the panel actually knows about - a bad
+            # name here would be saved to config.json and leave every other
+            # screen answering "Server not found."
+            if not get_server(name):
+                msg = "No world called '%s'." % name if name else "Pick a world first."
+                self._send(200, {"ok": False, "msg": msg}); return
             CONFIG['active'] = name; save_config(CONFIG)
             self._send(200, {"ok": True, "msg": "Active server: " + name}); return
         if path == '/api/shortcut':
@@ -1383,7 +1391,6 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"ok": ok, "msg": msg}); return
         self._send(404, {"ok": False, "msg": "unknown endpoint"})
 
-import urllib.parse  # noqa (used in handler)
 
 def main():
     # A download from last session is swapped in here, before anything opens.
