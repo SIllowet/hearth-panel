@@ -297,7 +297,11 @@ def stage_update(timeout=60):
                     continue
                 if top not in APP_FILES and top not in APP_DIRS:
                     continue
-                dst = os.path.join(STAGE_PAYLOAD, *rel.split('/'))
+                dst = os.path.normpath(os.path.join(STAGE_PAYLOAD, *rel.split('/')))
+                # An entry named 'ui/../../something' would land outside the
+                # staging folder and be swapped in as if it were ours.
+                if not dst.startswith(STAGE_PAYLOAD + os.sep):
+                    continue
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 with z.open(n) as src, open(dst, 'wb') as out:
                     shutil.copyfileobj(src, out)
