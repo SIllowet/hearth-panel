@@ -15,7 +15,7 @@ Two jobs, both deliberately boring:
 Standard library only, like the rest of the panel. No pip install.
 """
 
-import json, os, re, shutil, socket, subprocess, sys, threading, time, glob
+import json, os, re, shutil, socket, subprocess, sys, time, glob
 import urllib.request, urllib.error, zipfile, io
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -207,7 +207,7 @@ def doctor():
     blocking = [c for c in checks if not c["ok"] and not c.get("optional")]
     optional = [c for c in checks if not c["ok"] and c.get("optional")]
     return {
-        "version": APP_VERSION,
+        "version": _local_version(),
         "checks": checks,
         "ready": not blocking,
         "blocking": len(blocking),
@@ -543,7 +543,6 @@ def network_probe(audience='anyone'):
     hops = _hops()
     pub = _public_ip()
     priv_hops = [h for h in hops if _private(h)]
-    first_public = next((h for h in hops if not _private(h)), '')
 
     behind_cgnat = _cgnat(pub) or any(_cgnat(h) for h in hops)
     double_nat = len(priv_hops) >= 2
