@@ -22,6 +22,10 @@
 
   "memory": { "min": "2G", "max": "4G" },
 
+  "_backupsRoot_note": "Optional. Where backups go. Left out, they sit in a 'backups' folder inside each world - handy, but on the same disk as the thing they are protecting.",
+  "backupsRoot": "",
+
+
   "protected": ["MyWorld"],
 
   "_curseforgeKey_note": "Optional. Free key from console.curseforge.com, so the Mods tab can search CurseForge. Modrinth needs no key. Easiest added from the Mods tab in the UI.",

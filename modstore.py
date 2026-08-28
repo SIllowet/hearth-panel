@@ -12,6 +12,7 @@ CF = 'https://api.curseforge.com/v1'
 
 CF_GAME_ID = 432                                        # Minecraft
 CF_CLASS   = {'mod': 6, 'plugin': 5, 'datapack': 6945, 'shader': 6552, 'resourcepack': 12}
+CF_SHA1    = 1          # CurseForge's algo id for SHA-1 in a file's hashes
 CF_LOADER  = {'forge': 1, 'fabric': 4, 'quilt': 5, 'neoforge': 6}
 CF_REQUIRED = 3                                         # relationType: required dependency
 CF_CHANNEL = {1: 'release', 2: 'beta', 3: 'alpha'}
@@ -121,6 +122,9 @@ def _mr_file(v):
         'gameVersions': v.get('game_versions', []), 'loaders': v.get('loaders', []),
         'date': (v.get('date_published') or '')[:10], 'size': f.get('size', 0),
         'url': f.get('url'), 'blocked': not f.get('url'),
+        # the publisher's own checksum, so the panel can tell whether what
+        # arrived is the build the catalogue was describing
+        'sha1': (f.get('hashes') or {}).get('sha1', ''),
         'deps': [{'project': d.get('project_id'), 'version': d.get('version_id')} for d in deps],
     }
 
@@ -175,6 +179,8 @@ def _cf_file(f):
         'gameVersions': gvs, 'loaders': lds,
         'date': (f.get('fileDate') or '')[:10], 'size': f.get('fileLength', 0),
         'url': f.get('downloadUrl'), 'blocked': not f.get('downloadUrl'),
+        'sha1': next((h.get('value', '') for h in (f.get('hashes') or [])
+                      if h.get('algo') == CF_SHA1), ''),
         'deps': [{'project': d.get('modId'), 'version': None} for d in deps],
     }
 

@@ -28,3 +28,6 @@ backups/
 
 # The tunnel agent is downloaded, never committed
 playit.exe
+
+# The playit secret, handed to the agent through a file instead of the command line
+.playit-secret

@@ -468,10 +468,25 @@ let EMPTY=null;   // null until the first poll — so we always paint once we kn
 let cmdHist=[], cmdIdx=-1;
 let MODTAB='installed', MSRC='modrinth', MQ='', MPAGE=0, MRES=null, MINFO=null, VINFO=null;
 
-async function api(p,m='GET',b){const o={method:m,headers:{'Content-Type':'application/json'}};if(b)o.body=JSON.stringify(b);return (await fetch(p,o)).json();}
+/* X-Hearth marks a request as coming from the panel itself. Another site's page
+   cannot set it: a form can send no custom headers at all, and a fetch that
+   tries one needs a preflight the panel never answers. */
+async function api(p,m='GET',b){const o={method:m,headers:{'Content-Type':'application/json','X-Hearth':'1'}};if(b)o.body=JSON.stringify(b);
+  const r=await fetch(p,o);
+  if(r.status===403){try{return await r.json();}catch(e){return {ok:false,msg:'Hearth refused that request.'};}}
+  return r.json();}
 function el(id){return document.getElementById(id);}
-function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
-function attr(s){return String(s).replace(/"/g,'&quot;');}
+/* Escapes for BOTH text and attribute context - quotes included, because a
+   world name or a mod title off Modrinth lands in plenty of both. */
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+function attr(s){return esc(s);}
+/* For a value going inside a quoted JS string inside an attribute, e.g.
+   onclick="f('${js(name)}')" - escape the JS layer first, then the HTML one. */
+function js(s){return esc(String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"));}
+/* An address out of a mod catalogue is somebody else's text. Only http(s) gets
+   through - javascript: and data: URLs do not belong in an href or a src. */
+function openUrl(u){const t=String(u||'').trim();return /^https?:\/\//i.test(t)?t:'about:blank';}
+function safeUrl(u){const t=String(u||'').trim();return /^https?:\/\//i.test(t)?attr(t):'#';}
 function iconUrl(name,ver){return '/api/icon?name='+encodeURIComponent(name)+'&v='+(ver||0);}
 function toast(m){const t=el('toast');t.textContent=m;t.classList.add('show');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('show'),3000);}
 
@@ -507,7 +522,7 @@ function checkRow(c){
   if(!good && c.fix){
     const f=c.fix;
     const btn = f.kind==='link'
-      ? `<a class="btn sm" href="${attr(f.url)}" target="_blank" rel="noopener">${esc(f.label)}</a>`
+      ? `<a class="btn sm" href="${safeUrl(f.url)}" target="_blank" rel="noopener">${esc(f.label)}</a>`
       : (f.kind==='route'
           ? `<button class="btn sm" onclick="go('worlds')">${esc(f.label)}</button>`
           : '');
@@ -549,7 +564,7 @@ function updateCard(){
     ${notes?`<ul class="updnotes">${notes}</ul>`:''}
     <div class="row" style="margin-top:12px">
       <button class="btn" id="updBtn" onclick="doUpdate()">Get the update</button>
-      <a class="btn ghost sm" href="${attr(UPD.page||'#')}" target="_blank" rel="noopener">See what changed</a>
+      <a class="btn ghost sm" href="${safeUrl(UPD.page)}" target="_blank" rel="noopener">See what changed</a>
     </div>
     <p class="muted" style="margin-top:9px">Hearth downloads it now and swaps it
     in when you next start. Nothing of yours is overwritten.</p></div>`;
@@ -621,7 +636,7 @@ async function probeNetwork(){
 function wayBlock(key, recommended, reason){
   const w=WAYS[key]; if(!w) return '';
   const inst=NET&&NET.installed&&NET.installed[key];
-  const link=w.link?`<a class="btn sm" href="${attr(w.link[1])}" target="_blank" rel="noopener">${esc(w.link[0])}</a>`:'';
+  const link=w.link?`<a class="btn sm" href="${safeUrl(w.link[1])}" target="_blank" rel="noopener">${esc(w.link[0])}</a>`:'';
   return `<div class="way${recommended?' rec':''}">
     <div class="wayhead">
       <b>${esc(w.t)}</b>
@@ -830,12 +845,22 @@ async function tick(){
   }catch(e){}
 }
 let liveCount=0;
+/* Where we got to in the console, per source. The panel asks for what has
+   arrived since, instead of pulling the whole console down every 1.5 seconds. */
+let LOGSEQ={}, LOGSRC='';
+const LOG_KEEP=2000;
 async function pollLog(){
   try{
     const tun = CUR==='console' && el('showTun') && el('showTun').checked;
-    const r=await api(tun?'/api/log?tunnel=1':'/api/log?name='+encodeURIComponent(ACTIVE));
-    LOG=r.lines||[];
-  }catch(e){LOG=[];}
+    const src = tun?'tunnel':('world:'+(ACTIVE||''));
+    if(src!==LOGSRC){LOGSRC=src;LOG=[];}          /* switched source - start clean */
+    const since = LOGSEQ[src];
+    const base = tun?'/api/log?tunnel=1':'/api/log?name='+encodeURIComponent(ACTIVE);
+    const r=await api(base+(since==null?'':'&since='+since));
+    if(r.reset||!LOG.length){LOG=r.lines||[];}
+    else if(r.lines&&r.lines.length){LOG=LOG.concat(r.lines).slice(-LOG_KEEP);}
+    LOGSEQ[src]=r.seq;
+  }catch(e){}
 }
 
 /* ---------------- render ---------------- */
@@ -935,23 +960,23 @@ function renderWorldsLive(){const g=el('wGrid');if(!g||!STATE)return;
   if(!STATE.servers.length){g.innerHTML='<div class="emptyfire">No worlds yet — hit ＋ New world to make one.</div>';return;}
   g.innerHTML=STATE.servers.map(s=>{const foc=s.name===ACTIVE;const pl=s.players||[];
     const addr = s.hasTunnel&&s.address
-      ? `<div class="addrpill" style="margin-top:12px;font-size:13px;padding:10px 13px" onclick="copyFor('${attr(s.address)}')"><span class="mono">${esc(s.address)}</span><span class="ico">${copyIco}</span></div>`
-      : `<div class="muted" style="margin-top:12px">No public address yet · <a href="#" onclick="editMeta('${attr(s.name)}');return false">set it up</a></div>`;
+      ? `<div class="addrpill" style="margin-top:12px;font-size:13px;padding:10px 13px" onclick="copyFor('${js(s.address)}')"><span class="mono">${esc(s.address)}</span><span class="ico">${copyIco}</span></div>`
+      : `<div class="muted" style="margin-top:12px">No public address yet · <a href="#" onclick="editMeta('${js(s.name)}');return false">set it up</a></div>`;
     return `<div class="card worldcard paper ${foc?'active':''}">
       <div class="between">
         <div style="min-width:0"><div class="eyebrow" style="${s.group?'color:var(--ember)':''}">${esc(s.group||'no group')}${foc?' · focused':''}</div>
-          <div style="font-size:17px;font-weight:600;margin:4px 0 2px;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:8px"><span title="Change world icon" onclick="event.stopPropagation();openIcon('${attr(s.name)}')" style="cursor:pointer;flex:none;display:inline-flex">${s.hasIcon?`<img src="${iconUrl(s.name,s.iconVer)}" width="22" height="22" style="border-radius:5px;display:block"/>`:`<span style="width:22px;height:22px;border-radius:5px;border:1px dashed var(--border);display:grid;place-items:center;color:var(--muted);font-size:13px;line-height:1">＋</span>`}</span>${esc(s.name)}</div></div>
+          <div style="font-size:17px;font-weight:600;margin:4px 0 2px;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:8px"><span title="Change world icon" onclick="event.stopPropagation();openIcon('${js(s.name)}')" style="cursor:pointer;flex:none;display:inline-flex">${s.hasIcon?`<img src="${iconUrl(s.name,s.iconVer)}" width="22" height="22" style="border-radius:5px;display:block"/>`:`<span style="width:22px;height:22px;border-radius:5px;border:1px dashed var(--border);display:grid;place-items:center;color:var(--muted);font-size:13px;line-height:1">＋</span>`}</span>${esc(s.name)}</div></div>
         <span class="gd ${s.running?'lit':''}"></span>
       </div>
       <div class="meta">${esc(s.type)} · port ${s.port} · <span style="color:${s.running?'var(--success)':'var(--muted)'}">${s.running?(pl.length+' online'):'asleep'}</span></div>
       ${s.running&&pl.length?`<div style="margin-top:10px;display:flex;gap:5px;flex-wrap:wrap">${pl.map(miniCoin).join('')}</div>`:''}
       ${addr}
       <div class="row" style="margin-top:14px">
-        ${s.running?`<button class="btn sm" onclick="stopOne('${attr(s.name)}')">${sicon(ICON.moon)} Stop</button>`:`<button class="btn sm" style="border-color:var(--borderWarm);color:var(--ember)" onclick="startOne('${attr(s.name)}')">${sicon(ICON.flame)} Start</button>`}
-        ${foc?`<span class="btn sm" style="opacity:.5;cursor:default">✓ focused</span>`:`<button class="btn sm" onclick="focusServer('${attr(s.name)}')">Focus</button>`}
-        <button class="btn sm" onclick="editMeta('${attr(s.name)}')">Edit</button>
-        <button class="btn sm" onclick="openIcon('${attr(s.name)}')">Icon</button>
-        ${s.protected?'':`<button class="btn sm" style="color:var(--danger)" onclick="askDelete('${attr(s.name)}')">Delete</button>`}
+        ${s.running?`<button class="btn sm" onclick="stopOne('${js(s.name)}')">${sicon(ICON.moon)} Stop</button>`:`<button class="btn sm" style="border-color:var(--borderWarm);color:var(--ember)" onclick="startOne('${js(s.name)}')">${sicon(ICON.flame)} Start</button>`}
+        ${foc?`<span class="btn sm" style="opacity:.5;cursor:default">✓ focused</span>`:`<button class="btn sm" onclick="focusServer('${js(s.name)}')">Focus</button>`}
+        <button class="btn sm" onclick="editMeta('${js(s.name)}')">Edit</button>
+        <button class="btn sm" onclick="openIcon('${js(s.name)}')">Icon</button>
+        ${s.protected?'':`<button class="btn sm" style="color:var(--danger)" onclick="askDelete('${js(s.name)}')">Delete</button>`}
       </div></div>`;}).join('');
 }
 async function startOne(n){const r=await api('/api/server/start','POST',{name:n});toast(r.msg);tick();}
@@ -966,11 +991,11 @@ function editMeta(name){const s=STATE.servers.find(x=>x.name===name)||{};
       <div><div style="font-size:14px;font-weight:600">World icon <span class="muted" style="font-weight:400">— shows next to this world in the server list</span></div>
         <div class="row" style="margin-top:8px;align-items:center">
           ${s.hasIcon?`<img src="${iconUrl(name,s.iconVer)}" width="48" height="48" style="border-radius:8px;border:1px solid var(--border)"/>`:`<div style="width:48px;height:48px;border-radius:8px;border:1px dashed var(--border);display:grid;place-items:center;color:var(--muted);font-size:10px">none</div>`}
-          <button class="btn sm" type="button" onclick="openIcon('${attr(name)}')">Change icon…</button>
+          <button class="btn sm" type="button" onclick="openIcon('${js(name)}')">Change icon…</button>
         </div></div>
     </div>
     <div class="row" style="justify-content:flex-end;margin-top:18px"><button class="btn ghost" onclick="closeScrim()">Cancel</button>
-      <button class="primary" style="font-size:13px;padding:10px 20px" onclick="saveMeta('${attr(name)}')">Save</button></div></div>`;
+      <button class="primary" style="font-size:13px;padding:10px 20px" onclick="saveMeta('${js(name)}')">Save</button></div></div>`;
   el('scrim').classList.add('show');}
 async function saveMeta(name){const group=el('mGroup').value,address=el('mAddr').value.trim();
   const r=await api('/api/server/meta','POST',{name,group,address});toast(r.ok?'Saved':r.msg);closeScrim();tick();render();}
@@ -982,8 +1007,8 @@ function openIcon(name){const s=(STATE&&STATE.servers.find(x=>x.name===name))||{
     <p>Shows next to this world in your friends' Minecraft server list. Pick any image — it's auto-sized to 64×64.</p>
     <div class="row" style="align-items:center;gap:16px">${iconPreviewHtml(s)}
       <div style="display:flex;flex-direction:column;gap:8px">
-        <label class="btn sm" style="cursor:pointer;text-align:center">Choose image…<input type="file" accept="image/*" style="display:none" onchange="uploadIcon('${attr(name)}',this)"/></label>
-        ${s.hasIcon?`<button class="btn sm" type="button" style="color:var(--danger)" onclick="removeIcon('${attr(name)}')">Remove icon</button>`:''}
+        <label class="btn sm" style="cursor:pointer;text-align:center">Choose image…<input type="file" accept="image/*" style="display:none" onchange="uploadIcon('${js(name)}',this)"/></label>
+        ${s.hasIcon?`<button class="btn sm" type="button" style="color:var(--danger)" onclick="removeIcon('${js(name)}')">Remove icon</button>`:''}
       </div></div>
     <div class="hint-row" style="margin-top:14px">Tip: restart this world afterward so friends see the new icon in their server list.</div>
     <div class="row" style="justify-content:flex-end;margin-top:18px"><button class="btn ghost" onclick="closeScrim()">Done</button></div></div>`;
@@ -1009,7 +1034,7 @@ async function saveBank(){const text=el('bankTxt').value;const r=await api('/api
 function renderSwitcher(){if(!STATE)return;const cur=STATE.servers.find(s=>s.name===ACTIVE)||STATE.servers[0];
   if(cur){const wn=el('wmName'),wg=el('wmGroup');if(wn)wn.textContent=cur.name;if(wg)wg.textContent=cur.group||(cur.running?((cur.players||[]).length+' online'):'asleep');}
   const sw=el('switcher');if(!sw)return;
-  sw.innerHTML=STATE.servers.map(s=>`<div class="swrow ${s.name===ACTIVE?'on':''}" onclick="focusServer('${attr(s.name)}')">
+  sw.innerHTML=STATE.servers.map(s=>`<div class="swrow ${s.name===ACTIVE?'on':''}" onclick="focusServer('${js(s.name)}')">
       <span class="gd ${s.running?'lit':''}"></span><span class="nm">${esc(s.name)}</span>
       <span class="gp">${esc(s.group||(s.running?(s.players||[]).length+' on':'asleep'))}</span></div>`).join('')
     +`<div class="swrow new" onclick="openCreate();closeSwitcher()">＋  New world</div>`;}
@@ -1057,7 +1082,7 @@ function renderSettings(){
 
   <details class="disclosure"><summary>Advanced — all server.properties</summary>
     <table class="props">${Object.keys(PROPS).sort().map(k=>`<tr id="row-${attr(k)}"><td>${esc(k)}</td>
-      <td><input value="${attr(pval(k))}" oninput="setField('${attr(k)}',this.value);this.closest('tr').classList.add('dirty')"/></td></tr>`).join('')}</table>
+      <td><input value="${attr(pval(k))}" oninput="setField('${js(k)}',this.value);this.closest('tr').classList.add('dirty')"/></td></tr>`).join('')}</table>
   </details>
 
   <div class="row" style="margin-top:20px"><button class="primary" style="font-size:13px;padding:11px 22px" onclick="saveSettings()">Save changes</button>
@@ -1119,7 +1144,7 @@ function renderInstalled(){
   ${r.items.length?r.items.map(f=>`<div class="listrow">
       <div style="min-width:0"><div style="overflow:hidden;text-overflow:ellipsis">${esc(f.file)}</div>
         <div class="meta">${KB(f.size)}</div></div>
-      <button class="btn sm" style="color:var(--danger)" onclick="rmMod('${attr(f.file)}')">remove</button>
+      <button class="btn sm" style="color:var(--danger)" onclick="rmMod('${js(f.file)}')">remove</button>
     </div>`).join('')
    :`<div class="emptyfire">Nothing installed yet — hit <b>Browse catalogue</b> and pick something.</div>`}`;
 }
@@ -1181,22 +1206,22 @@ function pager(r){
     </span></div>`;
 }
 function mrow(m){
-  const pid=attr(String(m.id)), src=attr(m.source);
+  const pid=js(String(m.id)), src=js(m.source);
   const siteOnly=m.openOnly;
   return `<div class="mrow">
-    ${m.icon?`<img class="thumb" src="${attr(m.icon)}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'thumb ph',textContent:'▩'}))"/>`
+    ${m.icon?`<img class="thumb" src="${safeUrl(m.icon)}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'thumb ph',textContent:'▩'}))"/>`
             :`<div class="thumb ph">▩</div>`}
     <div class="body">
       <div class="tt">${esc(m.name)}
         ${siteOnly?'<span class="tag bad" title="This author only allows downloads from the CurseForge website">site-only</span>':''}</div>
       <div class="sm">${esc(m.summary||'')}</div>
       <div class="dl"><span>⬇ ${NUM(m.downloads)}</span>${m.author?`<span>by ${esc(m.author)}</span>`:''}${m.updated?`<span>updated ${esc(m.updated)}</span>`:''}
-        ${m.url?`<a href="${attr(m.url)}" target="_blank" rel="noreferrer">open page ↗</a>`:''}</div>
+        ${m.url?`<a href="${safeUrl(m.url)}" target="_blank" rel="noreferrer">open page ↗</a>`:''}</div>
     </div>
     <div class="acts">
-      ${siteOnly?`<button class="btn sm" onclick="window.open('${attr(m.url)}','_blank')">Open page</button>`
+      ${siteOnly?`<button class="btn sm" onclick="window.open(openUrl('${js(m.url)}'),'_blank')">Open page</button>`
                 :`<button class="btn sm" style="border-color:var(--borderWarm);color:var(--ember)" onclick="installMod('${src}','${pid}',this)">Install</button>`}
-      <button class="btn sm" onclick="buildSheet('${src}','${pid}','${attr(m.name)}')">Builds…</button>
+      <button class="btn sm" onclick="buildSheet('${src}','${pid}','${js(m.name)}')">Builds…</button>
     </div></div>`;
 }
 async function installMod(source,project,btn,fileId){
@@ -1224,7 +1249,7 @@ async function buildSheet(source,project,title){
         <div class="meta" style="font-size:11px;color:var(--muted)">MC ${esc((f.gameVersions||[]).slice(0,3).join(', ')||'?')} · ${esc(f.date||'')}${f.size?' · '+KB(f.size):''}</div>
       </div>
       ${f.blocked?'<span class="tag bad">site-only</span>'
-        :`<button class="btn sm" onclick="installMod('${attr(f.source)}','${attr(String(project))}',this,'${attr(String(f.id))}')">Install</button>`}
+        :`<button class="btn sm" onclick="installMod('${js(f.source)}','${js(String(project))}',this,'${js(String(f.id))}')">Install</button>`}
     </div>`).join('')}</div>
     <div class="row" style="justify-content:flex-end;margin-top:16px"><button class="btn ghost" onclick="closeScrim()">Done</button></div>`;
 }
@@ -1301,7 +1326,7 @@ function loaderRow(k,label,desc,v){
       <div class="meta">${desc}</div></div>
     ${on?'<span class="btn sm" style="opacity:.45;cursor:default">in use</span>'
         :blocked?'<span class="btn sm" style="opacity:.35;cursor:default">—</span>'
-        :`<button class="btn sm" onclick="askLoader('${k}','${attr(label)}')" ${v.running?'disabled style="opacity:.4"':''}>Switch</button>`}
+        :`<button class="btn sm" onclick="askLoader('${k}','${js(label)}')" ${v.running?'disabled style="opacity:.4"':''}>Switch</button>`}
   </div>`;
 }
 function askUpdate(){
@@ -1331,7 +1356,7 @@ function askLoader(target,label){
 }
 
 /* CONSOLE */
-function viewConsole(){return `<h1 class="page-h">Console</h1><p class="page-sub">Server output &amp; commands · <label style="color:var(--muted)"><input type="checkbox" id="showTun" onchange="pollLog().then(renderFullLog)"/> tunnel log</label></p>
+function viewConsole(){return `<h1 class="page-h">Console</h1><p class="page-sub">Server output &amp; commands · <label style="color:var(--muted)"><input type="checkbox" id="showTun" onchange="LOGSRC='';pollLog().then(renderFullLog)"/> tunnel log</label> · <a href="#" onclick="showLogFile();return false">open the full log file</a></p>
   <div class="console-wrap" id="cWrap"><div class="log" id="fullLog"></div></div>
   <div class="cmdbar"><input id="cmd" placeholder="run a command — try /say, /time set day, /op …" autocomplete="off"
       onkeydown="cmdKey(event)" oninput="ghost(this.value)"/><span class="ghosthint" id="ghost"></span>
@@ -1339,6 +1364,18 @@ function viewConsole(){return `<h1 class="page-h">Console</h1><p class="page-sub
   <div class="hint-row">↑/↓ recalls history · ⌘K opens the command palette</div>`;}
 function renderFullLog(){const f=el('fullLog');if(!f)return;const w=el('cWrap');const atB=w?(w.scrollHeight-w.scrollTop-w.clientHeight<50):true;
   f.innerHTML=fmtLog(LOG,LOG.length-1);if(atB&&w)w.scrollTop=w.scrollHeight;}
+/* The panel only holds what has happened since it started the world. When you
+   want to know why it stopped last night, that is in the world's own log. */
+async function showLogFile(){
+  const r=await api('/api/log?file=1&name='+encodeURIComponent(ACTIVE));
+  if(!r.ok){toast(r.note||'No log file.');return;}
+  el('scrim').innerHTML=`<div class="sheet" style="width:min(900px,92vw)"><h3>logs/latest.log</h3>
+    <p class="muted" style="margin-bottom:10px">${r.truncated?'The last part of the file — it is large.':'The whole file.'}</p>
+    <div class="console-wrap" style="max-height:60vh"><div class="log">${fmtLog(r.lines,null)}</div></div>
+    <div class="row" style="justify-content:flex-end;margin-top:16px"><button class="btn ghost" onclick="closeScrim()">Done</button></div></div>`;
+  el('scrim').classList.add('show');
+  const w=el('scrim').querySelector('.console-wrap'); if(w)w.scrollTop=w.scrollHeight;
+}
 const GHOSTS=['/say ','/time set day','/weather clear','/op ','/gamemode creative','/tp '];
 function ghost(v){const g=el('ghost');if(!g)return;if(v==='/'){g.textContent='try: '+GHOSTS.join('  ');g.style.opacity='.7';}else g.style.opacity='0';}
 function cmdKey(e){const i=e.target;
@@ -1420,7 +1457,7 @@ function renderAI(){
       ${(AIS.trusted||[]).map(n=>`<span style="padding:5px 10px;border:1px solid var(--border);border-radius:20px;font-size:12px">${esc(n)}</span>`).join('')||'<span class="meta">nobody yet</span>'}</div>
     <div class="row"><input id="aiAdd" placeholder="add a player name" style="flex:1" onkeydown="if(event.key==='Enter')aiAddTrust()"/>
       <button class="btn" onclick="aiAddTrust()">＋ Trust</button></div>
-    ${(AIS.configTrusted||[]).length?`<div class="row" style="flex-wrap:wrap;gap:6px;margin-top:10px">${AIS.configTrusted.map(n=>`<button class="btn sm" style="color:var(--danger)" onclick="aiDropTrust('${attr(n)}')">remove ${esc(n)}</button>`).join('')}</div>`:''}
+    ${(AIS.configTrusted||[]).length?`<div class="row" style="flex-wrap:wrap;gap:6px;margin-top:10px">${AIS.configTrusted.map(n=>`<button class="btn sm" style="color:var(--danger)" onclick="aiDropTrust('${js(n)}')">remove ${esc(n)}</button>`).join('')}</div>`:''}
     <div class="sub" style="color:var(--muted);font-size:12px;margin-top:12px">Always refused, even for you: ${(AIS.blocked||[]).map(esc).join(', ')}</div>
   </div>
 
@@ -1503,7 +1540,7 @@ function aiMemoryCard(){
       ${Object.keys(players).map(p=>`<div class="listrow" style="align-items:flex-start">
         <div style="min-width:0"><div style="font-weight:500">${esc(p)}</div>
           <div class="meta" style="white-space:normal">${(players[p]||[]).map(esc).join(' · ')}</div></div>
-        <button class="btn sm" style="color:var(--danger)" onclick="aiForget('${attr(p)}')">forget</button></div>`).join('')}
+        <button class="btn sm" style="color:var(--danger)" onclick="aiForget('${js(p)}')">forget</button></div>`).join('')}
     </div>`:'<div class="meta" style="margin-top:12px">no notes on anyone yet</div>'}
   </div>`;}
 
@@ -1525,7 +1562,7 @@ function renderTools(){
             <div class="meta" style="white-space:normal">${esc(t.what)}</div>
             <div class="meta" style="font-family:var(--mono);white-space:normal;opacity:.75">${esc(t.syntax)}</div>
           </div>
-          ${t.lockable?`<div class="sw ${t.on?'on':''}" onclick="tbToggle('${attr(t.cmd)}')"><b></b></div>`
+          ${t.lockable?`<div class="sw ${t.on?'on':''}" onclick="tbToggle('${js(t.cmd)}')"><b></b></div>`
                       :`<span class="meta" style="color:var(--danger)">never</span>`}
         </div>`).join('')}
     </div>`).join('');
@@ -1581,7 +1618,7 @@ function viewBackupsShell(){return `<h1 class="page-h">Backups</h1><p class="pag
 async function loadBackups(){const r=await api('/api/backups?name='+encodeURIComponent(ACTIVE));const b=el('bkBody');if(!b)return;const list=r.list||[];
   if(!list.length){b.innerHTML='<div class="emptyfire">No backups yet — one is made the next time it rests.</div>';return;}
   b.innerHTML=list.map(x=>`<div class="listrow"><div><div style="font-weight:500">${esc(x.file)}</div><div class="meta num">${esc(x.when)} · ${x.size} MB</div></div>
-    <button class="btn sm" onclick="askRestore('${attr(x.file)}')">restore</button></div>`).join('');}
+    <button class="btn sm" onclick="askRestore('${js(x.file)}')">restore</button></div>`).join('');}
 async function doBackup(){const btn=el('bkNow');if(btn){btn.textContent='Backing up…';btn.disabled=true;}const r=await api('/api/server/backup','POST',{name:ACTIVE});toast(r.msg);if(btn){btn.textContent='Back up now';btn.disabled=false;}loadBackups();}
 
 /* actions */
