@@ -43,8 +43,34 @@ def wanted_files():
                 yield os.path.relpath(p, BASE).replace(os.sep, '/'), p
 
 
+def crlf_files(rows):
+    """Files whose bytes on disk are not what the repository holds.
+
+    A checkout that converted line endings gives every text file a different
+    checksum from the one in the release zip, so digests generated from it
+    would match nothing and updates would fail for everyone who tried. Git is
+    told not to do that in .gitattributes; this is here in case the checkout
+    predates it.
+    """
+    bad = []
+    for rel, path in rows:
+        with open(path, 'rb') as f:
+            head = f.read(1024 * 64)
+        if b'\r\n' in head:
+            bad.append(rel)
+    return bad
+
+
 def render():
     rows = sorted(set(wanted_files()))
+    bad = crlf_files(rows)
+    if bad:
+        raise SystemExit(
+            "These files have Windows line endings, which would make every\n"
+            "published checksum wrong: %s\n"
+            "Your checkout converted them. Fix it with:\n"
+            "    git rm --cached -r . && git reset --hard\n"
+            "(.gitattributes stops it happening again.)" % ", ".join(bad))
     out = ["# sha256 of every file Hearth's updater replaces.",
            "# Regenerate with: python tools/make_sums.py"]
     out += ["%s  %s" % (digest(path), rel) for rel, path in rows]

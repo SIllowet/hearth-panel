@@ -1,0 +1,17 @@
+# Hearth's updater checks a download against the SHA256SUMS the author
+# published, so every copy of a file has to be byte-for-byte identical
+# everywhere. Git's default on Windows rewrites line endings on checkout,
+# which changes the bytes and therefore the checksum: a maintainer who
+# generated SHA256SUMS on a Windows checkout would publish digests that no
+# download could ever match, and updates would fail for everyone.
+#
+# Pinning the endings keeps the working tree, the repository and the release
+# zip in agreement on every platform. LF is what is already committed here,
+# so nothing that ships changes.
+* text=auto eol=lf
+
+# Not text - never touch these.
+*.ico binary
+*.png binary
+*.jar binary
+*.zip binary
