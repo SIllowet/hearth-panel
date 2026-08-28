@@ -38,6 +38,7 @@ taskbar, so it minimises and closes like any other program.
 - **Its own window** — not a browser tab. Own taskbar button, and it can put a shortcut on your desktop.
 - **Updates itself** — when you ask it to. Your worlds, backups and settings are never touched. [Details below.](#keeping-it-up-to-date)
 - **A safety guard** — the panel refuses to start a world whose port is already in use. Two servers running on one world folder will overwrite each other's saves, and this stops that happening.
+- **Tests** — `python -m pytest tests -q`. They run on any OS, need no Minecraft server and touch nothing of yours.
 
 ---
 
@@ -317,6 +318,7 @@ Created automatically on first run, next to `app.py`. Stop the panel before edit
   ],
   "active": "MyWorld",
   "memory": { "min": "2G", "max": "4G" },
+  "backupsRoot": "D:\\HearthBackups",
   "protected": ["MyWorld"],
   "curseforgeKey": "your-curseforge-api-key",
   "bank": []
@@ -329,6 +331,7 @@ Created automatically on first run, next to `app.py`. Stop the panel before edit
 | `servers[].type` | `vanilla`, `paper` or `fabric`. Decides whether plugins/mods are offered. |
 | `servers[].group` | A label, e.g. "College friends". Cosmetic. |
 | `memory` | RAM given to every world (`-Xms` / `-Xmx`). Give it about half your total RAM, and never more than you actually have. |
+| `backupsRoot` | Optional. Keep backups here instead of inside each world folder — an external drive, say. Each world gets its own folder under it. |
 | `protected` | Names that can't be deleted from the panel — a guard for your main world. |
 | `curseforgeKey` | Your free CurseForge API key, so the Mods tab can search CurseForge. Optional — Modrinth needs no key. Easiest set from the Mods tab. |
 | `bank` | The tunnel bank, described above. Also editable from the UI. |
@@ -459,20 +462,54 @@ Every world is zipped to `<server folder>\backups\`:
 - every 2 hours while it's running,
 - whenever you hit **Back up now**.
 
+**What goes in.** The overworld, **the Nether and the End**, and the settings that
+make the world what it is — `server.properties`, `ops.json`, `whitelist.json`, the
+ban lists. Paper and Spigot keep the other dimensions in folders *beside* the world
+rather than inside it, so a backup that saves only `level-name` quietly loses
+everything anyone built through a portal. Hearth takes all of them together.
+
+**What a restore puts back** is the world — every dimension of it. The settings are
+in the zip so you can recover them if the whole folder is ever lost, but a restore
+leaves the live ones alone: quietly reverting `server.properties` would undo changes
+you made since, which is not what anyone means by "restore my world".
+
+A world that is running is told to save first, so **Back up now** copies what is
+actually in the world rather than whatever happened to be on disk.
+
 The last 15 automatic backups are kept; manual ones are never deleted automatically.
 
+**Somewhere else, if you prefer.** By default backups sit inside the world folder,
+which is convenient but means they share its disk and its fate. Set `backupsRoot`
+in `config.json` to put them somewhere else — an external drive, say — and each
+world gets its own folder under it.
+
 **Restore** is on the Backups tab. The world must be stopped first. Your current world
-folder isn't thrown away — it's renamed to `world_prerestore_<timestamp>` and left
-beside the new one, so a wrong restore is always undoable.
+folders aren't thrown away — each is renamed to `<name>_prerestore_<timestamp>` and
+left beside the new one, so a wrong restore is always undoable. All the dimensions
+move aside together, so you never end up with an overworld from one day and a Nether
+from another. The two most recent of these are kept and older ones are cleared away.
 
 ---
 
 ## Security, plainly
 
 - The panel listens on `127.0.0.1` only. Nothing outside your PC can reach it.
+- **Other web pages can't drive it.** Listening on `127.0.0.1` keeps other *computers*
+  out, but any page open in your browser can still send requests to it. Hearth checks
+  that a request came from the panel itself — the address it was sent to, where it came
+  from, and a header only the panel's own page can set — and refuses the rest. That
+  also covers the trick of pointing a hostile domain name at `127.0.0.1`.
 - **There is no password.** Anyone who can use your computer can use the panel, and
   the panel can run any server command. Don't expose port 8765 to your network or
   the internet — it is not built to survive that.
+- **Downloads are checked, not just fetched.** Server jars are verified against the
+  checksum Mojang or PaperMC published, mods against the one the catalogue gave for
+  that exact build, and Hearth's own updates against a `SHA256SUMS` file fetched
+  separately from the code. Anything that doesn't match is thrown away rather than
+  installed, and nothing is written into place until it has passed.
+- **Your playit secret stays off the command line**, where every other program on the
+  PC could read it — Hearth hands it to the agent through a file or the environment
+  instead, where the agent supports it.
 - The playit tunnel exposes your **Minecraft server**, not the panel.
 - **The AI has real console access.** It is gated two ways — the player has to be
   on your trusted list, and the command has to be on the toolbelt — and the
@@ -521,7 +558,17 @@ normal browser. Everything still works; it is just a tab.
 a previous run of the panel, so this one has no pipe to its output. Stop and start it
 from the panel to get the console back.
 
-**I edited `app.py` and nothing changed** — restart the panel.
+**I edited `app.py` and nothing changed** — restart the panel. If you edited a file
+that ships with Hearth, also run `python tools/make_sums.py`, or the updater will
+refuse the next update as not matching what was published.
+
+**"That request did not come from the Hearth panel"** — something other than the
+panel's own page tried to POST to it. If you were doing something ordinary in the
+panel when this appeared, a stale tab is the usual cause: reload it.
+
+**I want to see what happened before the panel started** — the Console tab only holds
+output from worlds this run of the panel started. **Open the full log file** on that
+tab reads the world's own `logs/latest.log`, which goes back further.
 
 ---
 
@@ -537,9 +584,14 @@ ai.py             the console companion: chat, providers, trust, memory.
                   Optional — delete it and the panel runs exactly as before.
 mc_tools.py       the toolbelt: every Minecraft command the AI may use, with
                   syntax and risk level. Edit this to widen or narrow its reach.
+hearth_setup.py   first-run checks, the network probe, and the self-updater.
 config.json       your servers and secrets. Created on first run. Never committed.
 ai_config.json    the AI's name, personality, provider and API key. Never committed.
 ai_memory.json    what the AI knows about your server and your players.
+SHA256SUMS        the checksum of every file an update replaces. Regenerate with
+                  `python tools/make_sums.py` before publishing a version.
+tests/            run with `python -m pytest tests -q`. No servers, no network,
+                  no Windows needed — they run anywhere Python does.
 ```
 
 Every world runs as a child process of the panel, with its stdin/stdout piped — which

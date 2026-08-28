@@ -23,7 +23,9 @@ except Exception as _e:              # the panel must still boot without it
     print("hearth_setup not loaded:", _e)
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(BASE, 'config.json')
+# Normally right next to app.py. The override exists so the tests can run
+# against a scratch folder instead of your real worlds.
+CONFIG_PATH = os.environ.get('HEARTH_CONFIG') or os.path.join(BASE, 'config.json')
 UI_DIR = os.path.join(BASE, 'ui')
 HOST, PORT = '127.0.0.1', 8765
 MANIFEST_URL = 'https://launchermeta.mojang.com/mc/game/version_manifest_v2.json'
@@ -54,9 +56,16 @@ def load_config():
     c = default_config(); save_config(c); return c
 
 def save_config(c):
+    # Written to one side and moved into place, so a crash or a full disk
+    # halfway through leaves the old config intact rather than a truncated file
+    # the panel cannot read - it holds your worlds and your tunnel secret.
     with _cfg_lock:
-        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+        tmp = CONFIG_PATH + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(c, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, CONFIG_PATH)
 
 CONFIG = load_config()
 
@@ -67,11 +76,20 @@ def get_server(name):
     return None
 
 # --------------------------------------------------------------------------- processes
+LOG_LINES = 2000          # what the console keeps in memory
+
 class ManagedProc:
     def __init__(self):
         self.p = None
-        self.log = deque(maxlen=500)
+        self.log = deque(maxlen=LOG_LINES)
         self.ready = False
+        self.seq = 0          # lines seen since launch, so the UI can ask for
+                              # only what is new instead of the whole console
+        # Who is online, kept up to date line by line. It used to be worked out
+        # by re-reading the log on every poll, which meant that on a busy server
+        # the "joined the game" lines scrolled off the end and players quietly
+        # disappeared from the panel while they were still standing there.
+        self.players = []
         # Held while launching. The panel serves requests on threads, so a
         # double-click on Start arrives as two requests at once - without this
         # both would look at a stopped world and both would launch a jar.
@@ -97,11 +115,7 @@ def find_java():
             return exe
     return 'java'
 
-def port_listening(port):
-    try:
-        port = int(port)
-    except Exception:
-        return False
+def _probe_port(port):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(0.3)
     try:
@@ -111,6 +125,38 @@ def port_listening(port):
     finally:
         try: s.close()
         except Exception: pass
+
+# The panel asks "is this port up?" for every world on every poll, and each
+# miss costs the full timeout. A world does not come up or go down inside a
+# second, so a very short memory here takes that off the poll entirely.
+PORT_CACHE_TTL = 1.0
+_port_cache = {}
+_port_cache_lock = threading.Lock()
+
+def port_listening(port, max_age=PORT_CACHE_TTL):
+    try:
+        port = int(port)
+    except Exception:
+        return False
+    now = time.time()
+    if max_age:
+        with _port_cache_lock:
+            hit = _port_cache.get(port)
+        if hit and now - hit[0] < max_age:
+            return hit[1]
+    up = _probe_port(port)
+    with _port_cache_lock:
+        _port_cache[port] = (now, up)
+    return up
+
+def forget_port(port):
+    """After we start or stop something, the remembered answer is stale."""
+    try:
+        port = int(port)
+    except Exception:
+        return
+    with _port_cache_lock:
+        _port_cache.pop(port, None)
 
 def pid_on_port(port):
     try:
@@ -126,6 +172,26 @@ def pid_on_port(port):
             return int(parts[-1])
     return None
 
+JOIN_RE = re.compile(r']:\s+([A-Za-z0-9_]{2,16}) joined the game')
+LEAVE_RE = re.compile(r']:\s+([A-Za-z0-9_]{2,16}) (?:left the game|lost connection)')
+
+def track_players(players, line):
+    """Fold one console line into the list of who is online. Returns the same
+    list, edited in place - the server tells us about every join and leave, so
+    following along beats re-deriving it from whatever log we still hold."""
+    if 'Starting minecraft server' in line:
+        del players[:]
+        return players
+    m = JOIN_RE.search(line)
+    if m:
+        if m.group(1) not in players:
+            players.append(m.group(1))
+        return players
+    m = LEAVE_RE.search(line)
+    if m and m.group(1) in players:
+        players.remove(m.group(1))
+    return players
+
 def _reader(mp, stream, watcher=None):
     try:
         for line in iter(stream.readline, ''):
@@ -133,6 +199,8 @@ def _reader(mp, stream, watcher=None):
                 break
             line = line.rstrip('\n')
             mp.log.append(line)
+            mp.seq += 1
+            track_players(mp.players, line)
             if 'Done (' in line:
                 mp.ready = True
             if watcher:
@@ -157,7 +225,7 @@ def start_server(name):
         if mp.running():
             return True, "Already running."
         sport = read_properties(name).get('server-port')
-        if sport and port_listening(sport):
+        if sport and port_listening(sport, max_age=0):
             return False, "BLOCKED: port " + sport + " is already in use — a server is already running on this world. Refusing to launch a second one (that's what wiped the world before)."
         path = s['path']
         jar = os.path.join(path, 'server.jar')
@@ -167,7 +235,8 @@ def start_server(name):
         mem = CONFIG.get('memory') or {}
         args = [java, '-Xms' + str(mem.get('min', '2G')), '-Xmx' + str(mem.get('max', '4G')),
                 '-XX:+UseG1GC', '-jar', 'server.jar', 'nogui']
-        mp.log.clear(); mp.ready = False
+        mp.log.clear(); mp.ready = False; mp.seq = 0; del mp.players[:]
+        forget_port(sport)
         try:
             mp.p = subprocess.Popen(args, cwd=path, stdin=subprocess.PIPE,
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -212,7 +281,7 @@ def stop_server(name):
     if not mp.running():
         # not launched in this panel session, but an orphan may still hold the port
         sport = read_properties(name).get('server-port')
-        if sport and port_listening(sport):
+        if sport and port_listening(sport, max_age=0):
             pid = pid_on_port(sport)
             if pid:
                 try:
@@ -226,6 +295,7 @@ def stop_server(name):
         mp.p.stdin.write('stop\n'); mp.p.stdin.flush()
     except Exception:
         pass
+    forget_port(read_properties(name).get('server-port'))
     def waiter():
         try:
             mp.p.wait(timeout=25)
@@ -279,6 +349,59 @@ def playit_proc_running():
 def tunnel_alive():
     return TUNNEL.running() or playit_proc_running()
 
+SECRET_FILE = os.path.join(BASE, '.playit-secret')
+
+_playit_help = {}
+def playit_help(exe):
+    """What this build of the agent understands, asked once and remembered."""
+    if exe in _playit_help:
+        return _playit_help[exe]
+    txt = ''
+    try:
+        p = subprocess.run([exe, '--help'], capture_output=True, text=True,
+                           timeout=15, creationflags=NO_WINDOW)
+        txt = ((p.stdout or '') + (p.stderr or '')).lower()
+    except Exception:
+        txt = ''
+    _playit_help[exe] = txt
+    return txt
+
+def write_secret_file(secret):
+    """Keep the secret in a file only this account can read. Created with the
+    mode already set rather than tightened afterwards, so there is no moment
+    where it sits there world-readable."""
+    try:
+        os.remove(SECRET_FILE)
+    except OSError:
+        pass
+    fd = os.open(SECRET_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        f.write(secret.strip() + '\n')
+    return SECRET_FILE          # Windows ignores the mode; there the file
+                                # sits in a per-user folder, which is what
+                                # protects it
+
+def playit_launch(exe, secret):
+    """How to start the agent without putting the secret on the command line.
+
+    Anything passed as an argument is visible to every other program on this
+    PC - it shows up in Task Manager and in `tasklist` - and this one is the
+    key to your tunnel. Which of these the agent accepts depends on its
+    version, so we ask it rather than guess, and fall back to the old way
+    rather than leave someone with a tunnel that will not start.
+    """
+    help_txt = playit_help(exe)
+    env = dict(os.environ)
+    if '--secret-path' in help_txt:
+        return [exe, '--secret-path', write_secret_file(secret)], env, ''
+    if 'playit_secret' in help_txt:
+        env['PLAYIT_SECRET'] = secret.strip()
+        return [exe], env, ''
+    env['PLAYIT_SECRET'] = secret.strip()
+    return ([exe, '--secret', secret], env,
+            "Note: this build of playit only takes the secret on the command line, "
+            "where other programs on this PC can see it. A newer playit avoids that.")
+
 def start_tunnel(name=None):
     t = account_tunnel()
     if not t:
@@ -289,11 +412,15 @@ def start_tunnel(name=None):
     if not exe or not os.path.exists(exe):
         return False, "playit.exe not found."
     TUNNEL.log.clear()
+    args, env, note = playit_launch(exe, t['secret'])
+    if note:
+        TUNNEL.log.append(note)
     try:
-        TUNNEL.p = subprocess.Popen([exe, '--secret', t['secret']],
+        TUNNEL.p = subprocess.Popen(args,
                                     cwd=os.path.dirname(exe), stdin=subprocess.DEVNULL,
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                    text=True, bufsize=1, creationflags=NO_WINDOW)
+                                    text=True, bufsize=1, env=env,
+                                    creationflags=NO_WINDOW)
     except Exception as e:
         return False, "Failed to start tunnel: " + str(e)
     threading.Thread(target=_reader, args=(TUNNEL, TUNNEL.p.stdout), daemon=True).start()
@@ -369,10 +496,44 @@ def get_versions():
 
 UA = 'Hearth-Panel/1.0 (+local Minecraft server panel)'
 
-def _download(url, dest):
+def _digest(path, algo='sha1'):
+    h = hashlib.new(algo)
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+def _download(url, dest, algo=None, want=None, expect_jar=False):
+    """Fetch to a .part file, check it, and only then put it in place. Writing
+    straight to dest leaves a half-file or a wrong file sitting there looking
+    like the real thing when anything goes wrong partway.
+
+    algo/want: verify the checksum the publisher gave us, when they give one.
+    expect_jar: at minimum make sure we were handed a jar and not an error page.
+    """
+    if not url.lower().startswith('https://'):
+        raise ValueError("refusing to download over an insecure connection")
+    tmp = dest + '.part'
     req = urllib.request.Request(url, headers={'User-Agent': UA})
-    with urllib.request.urlopen(req, timeout=600) as r, open(dest, 'wb') as f:
-        shutil.copyfileobj(r, f)
+    try:
+        with urllib.request.urlopen(req, timeout=600) as r:
+            if not r.geturl().lower().startswith('https://'):
+                raise ValueError("that download redirected to an insecure connection")
+            with open(tmp, 'wb') as f:
+                shutil.copyfileobj(r, f)
+        if want:
+            got = _digest(tmp, algo or 'sha1')
+            if got.lower() != str(want).lower():
+                raise ValueError("checksum did not match - the file that arrived is not the one that was published")
+        if expect_jar:
+            with open(tmp, 'rb') as f:
+                if f.read(2) != b'PK':      # every jar is a zip
+                    raise ValueError("what arrived is not a jar (probably an error page)")
+        os.replace(tmp, dest)
+    finally:
+        if os.path.exists(tmp):
+            try: os.remove(tmp)
+            except Exception: pass
 
 def _api_json(url, timeout=25):
     req = urllib.request.Request(url, headers={'User-Agent': UA, 'Accept': 'application/json'})
@@ -394,11 +555,10 @@ def fetch_vanilla_jar(version, dest):
     sv = meta.get('downloads', {}).get('server')
     if not sv:
         return False, "No server jar for that version."
-    _download(sv['url'], dest)
-    if sv.get('sha1'):
-        h = hashlib.sha1(open(dest, 'rb').read()).hexdigest()
-        if h != sv['sha1']:
-            return False, "Checksum mismatch."
+    try:
+        _download(sv['url'], dest, 'sha1', sv.get('sha1'), expect_jar=True)
+    except Exception as e:
+        return False, "That download did not arrive intact (%s). Nothing was saved." % str(e)[:90]
     return True, "ok"
 
 _paper_cache = {"t": 0, "data": None}
@@ -422,12 +582,8 @@ def fetch_paper_jar(version, dest):
         dl = (b.get('downloads') or {}).get('server:default') or {}
         if not dl.get('url'):
             return False, "Paper has no server build for " + version + " yet."
-        _download(dl['url'], dest)
         want = (dl.get('checksums') or {}).get('sha256')
-        if want:
-            h = hashlib.sha256(open(dest, 'rb').read()).hexdigest()
-            if h != want:
-                return False, "The Paper download arrived corrupted - try again."
+        _download(dl['url'], dest, 'sha256', want, expect_jar=True)
         return True, "ok"
     except Exception as e:
         return False, "Paper isn't available for " + version + " (" + str(e) + ")"
@@ -454,8 +610,12 @@ def fetch_fabric_jar(version, dest):
         lv = pick['loader']['version']
         inst = _api_json(FABRIC_META + '/versions/installer')
         iv = next((i['version'] for i in inst if i.get('stable')), inst[0]['version'])
+        # Fabric publishes no checksum for the launcher it builds on request,
+        # so the jar check is what we have: it at least tells an error page
+        # from a program, and the download is verified TLS either way.
         _download('%s/versions/loader/%s/%s/%s/server/jar'
-                  % (FABRIC_META, urllib.parse.quote(version), lv, iv), dest)
+                  % (FABRIC_META, urllib.parse.quote(version), lv, iv), dest,
+                  expect_jar=True)
         return True, "ok"
     except Exception as e:
         return False, "Fabric isn't available for " + version + " (" + str(e) + ")"
@@ -513,7 +673,7 @@ def world_busy(name):
     if proc_for(name).running():
         return True
     sport = read_properties(name).get('server-port')
-    return bool(sport and sport != '?' and port_listening(sport))
+    return bool(sport and sport != '?' and port_listening(sport, max_age=0))
 
 def server_version(s):
     """Best guess at which Minecraft version a server folder is on."""
@@ -683,15 +843,16 @@ def add_mod(name, url):
     url = url.strip()
     try:
         if url.lower().startswith('http'):
-            fn = url.split('/')[-1].split('?')[0]
-            if not fn.lower().endswith('.jar'):
-                fn += '.jar'
-            _download(url, os.path.join(d, fn))
+            if not url.lower().startswith('https://'):
+                return False, ("That address is not https, so Hearth won't fetch a program from it. "
+                               "Download the jar yourself and use 'Install from file'.")
+            fn = safe_jar_name(url)
+            _download(url, os.path.join(d, fn), expect_jar=True)
             return True, "Added " + fn
         else:
             if not os.path.exists(url):
                 return False, "File not found: " + url
-            fn = os.path.basename(url)
+            fn = safe_jar_name(url)
             shutil.copy2(url, os.path.join(d, fn))
             return True, "Added " + fn
     except Exception as e:
@@ -702,8 +863,12 @@ def remove_mod(name, fn):
     d, kind = mods_dir(s) if s else (None, None)
     if not d:
         return False, "Not applicable."
-    fn = os.path.basename(fn)
+    fn = os.path.basename(str(fn or '').replace('\\', '/').split('/')[-1])
+    if not fn or fn in ('.', '..'):
+        return False, "Not found."
     target = os.path.join(d, fn)
+    if os.path.abspath(os.path.dirname(target)) != os.path.abspath(d):
+        return False, "Not found."
     if os.path.exists(target):
         os.remove(target)
         return True, "Removed " + fn
@@ -783,12 +948,31 @@ def _stem(fn):
     m = _VER_CUT.search(base)
     return (base[:m.start()] if m and m.start() > 2 else base).strip('-_+.')
 
-def _put_jar(d, filename, url):
-    """Download one jar, replacing any older build of the same project."""
-    fn = os.path.basename(filename or '') or 'mod.jar'
-    fn = re.sub(r'[^A-Za-z0-9._+\- ]', '_', fn)
+def safe_jar_name(filename, fallback='mod.jar'):
+    """A filename off the internet is a suggestion, not an instruction. Take
+    the last path segment - by both separators, because a backslash survives a
+    split on '/' and lands us outside the mods folder on Windows - and keep only
+    characters that mean nothing to a file system."""
+    fn = str(filename or '').replace('\\', '/').split('/')[-1].split('?')[0].split('#')[0]
+    fn = os.path.basename(fn)
+    fn = re.sub(r'[^A-Za-z0-9._+\- ]', '_', fn).strip(' .')
+    if not fn or set(fn) <= {'.', '_', ' '}:
+        fn = fallback
     if not fn.lower().endswith('.jar'):
         fn += '.jar'
+    return fn
+
+def _put_jar(d, filename, url, sha1=None):
+    """Download one jar, replacing any older build of the same project.
+
+    The download happens first and the old build is only cleared away once the
+    new one is safely on disk - an upgrade that fails its checksum should leave
+    you with the mod you already had, not with neither.
+    """
+    fn = safe_jar_name(filename)
+    # The catalogue tells us the checksum of the build it just described. If
+    # what arrives is something else, it does not go into the mods folder.
+    _download(url, os.path.join(d, fn), 'sha1', sha1 or None, expect_jar=True)
     stem, replaced = _stem(fn), None
     for old in os.listdir(d):
         if old.lower().endswith('.jar') and old != fn and _stem(old) == stem:
@@ -796,9 +980,6 @@ def _put_jar(d, filename, url):
                 os.remove(os.path.join(d, old)); replaced = old
             except Exception:
                 pass
-    tmp = os.path.join(d, fn + '.part')
-    _download(url, tmp)
-    os.replace(tmp, os.path.join(d, fn))
     return fn, replaced
 
 def install_mod(name, source, project, file_id=None, deps=True):
@@ -827,7 +1008,7 @@ def install_mod(name, source, project, file_id=None, deps=True):
             if w.get('blocked') or not w.get('url'):
                 blocked.append(w)
                 continue
-            fn, replaced = _put_jar(d, w.get('filename') or w.get('name'), w['url'])
+            fn, replaced = _put_jar(d, w.get('filename') or w.get('name'), w['url'], w.get('sha1'))
             got.append(fn)
             if replaced:
                 swapped.append(replaced)
@@ -860,9 +1041,9 @@ def upload_mod(name, filename, data):
     if err:
         return False, err
     s, d, kind, loader, gv = t
-    fn = os.path.basename(filename or '')
-    if not fn.lower().endswith('.jar'):
+    if not str(filename or '').lower().endswith('.jar'):
         return False, "That isn't a .jar file - mods and plugins are always .jar."
+    fn = safe_jar_name(filename)
     raw = data or ''
     if ',' in raw[:100] and raw.lstrip().startswith('data:'):
         raw = raw.split(',', 1)[1]
@@ -877,7 +1058,6 @@ def upload_mod(name, filename, data):
     if blob[:2] != b'PK':
         return False, "That doesn't look like a real jar (a jar is a zip - this isn't)."
     os.makedirs(d, exist_ok=True)
-    fn = re.sub(r'[^A-Za-z0-9._+\- ]', '_', fn)
     with open(os.path.join(d, fn), 'wb') as f:
         f.write(blob)
     return True, "Installed " + fn + ". Restart the world to load it."
@@ -1026,32 +1206,95 @@ def rollback_server(name):
 # --------------------------------------------------------------------------- backups
 BACKUP_KEEP = 15
 
-def _zip_dir(src_dir, dest_zip):
-    base = os.path.dirname(src_dir)
+# Vanilla keeps the Nether and the End inside the world folder as DIM-1/DIM1.
+# Paper and Spigot do not - they split them into folders alongside it. Backing
+# up only level-name on a Paper server quietly saves the overworld and drops
+# everything anyone built through a portal.
+DIM_SUFFIXES = ('_nether', '_the_end')
+
+# Worth having in the zip even though they are not the world: without them a
+# restore brings back the map but not the ops, the whitelist or the settings.
+CONFIG_FILES = (
+    'server.properties', 'ops.json', 'whitelist.json', 'banned-players.json',
+    'banned-ips.json', 'permissions.yml', 'bukkit.yml', 'spigot.yml',
+    'paper-global.yml', 'paper-world-defaults.yml', 'current-version.txt',
+)
+
+def world_dirs(server_path, level):
+    """Every folder that is part of this save, in the order we restore them."""
+    out = []
+    for cand in [level] + [level + suf for suf in DIM_SUFFIXES]:
+        p = os.path.join(server_path, cand)
+        if os.path.isdir(p):
+            out.append(p)
+    return out
+
+def _zip_paths(server_path, dirs, files, dest_zip):
+    """Everything goes in relative to the server folder, so a restore is a
+    straight extract back over the top of it."""
     with zipfile.ZipFile(dest_zip, 'w', zipfile.ZIP_DEFLATED) as z:
-        for root, _dirs, files in os.walk(src_dir):
-            for f in files:
-                fp = os.path.join(root, f)
+        for d in dirs:
+            for root, _dirs, fs in os.walk(d):
+                for f in fs:
+                    fp = os.path.join(root, f)
+                    try:
+                        z.write(fp, os.path.relpath(fp, server_path))
+                    except Exception:
+                        pass
+        for f in files:
+            fp = os.path.join(server_path, f)
+            if os.path.isfile(fp):
                 try:
-                    z.write(fp, os.path.relpath(fp, base))
+                    z.write(fp, os.path.relpath(fp, server_path))
                 except Exception:
                     pass
+
+def backups_dir(s):
+    """Where this world's backups live. Default is a 'backups' folder inside
+    the world, which is convenient but shares its fate and its disk - set
+    backupsRoot in config.json to keep them somewhere else."""
+    root = (CONFIG.get('backupsRoot') or '').strip()
+    if root:
+        return os.path.join(root, s['name'])
+    return os.path.join(s['path'], 'backups')
+
+def flush_world(name, wait=5):
+    """Ask a running world to write itself to disk, and give it a moment. A
+    backup taken without this is whatever happened to have been saved already."""
+    mp = SERVERS.get(name)
+    if not (mp and mp.running()):
+        return False
+    try:
+        mp.p.stdin.write('save-all flush\n'); mp.p.stdin.flush()
+    except Exception:
+        return False
+    time.sleep(wait)
+    return True
 
 def auto_backup(name, tag):
     s = get_server(name)
     if not s:
         return None
     level = read_properties(name).get('level-name', 'world')
-    world = os.path.join(s['path'], level)
-    if not os.path.isdir(world):
+    dirs = world_dirs(s['path'], level)
+    if not dirs:
         return None
-    bdir = os.path.join(s['path'], 'backups')
+    bdir = backups_dir(s)
     os.makedirs(bdir, exist_ok=True)
     ts = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     dest = os.path.join(bdir, 'auto_%s_%s.zip' % (tag, ts))
+    # Two backups inside the same second - stopping a world right after backing
+    # it up by hand - would otherwise land on the same name, and the second
+    # would quietly overwrite the first.
+    n = 2
+    while os.path.exists(dest):
+        dest = os.path.join(bdir, 'auto_%s_%s_%d.zip' % (tag, ts, n))
+        n += 1
     try:
-        _zip_dir(world, dest)
+        _zip_paths(s['path'], dirs, CONFIG_FILES, dest)
     except Exception:
+        try: os.remove(dest)
+        except Exception: pass
         return None
     autos = sorted(glob.glob(os.path.join(bdir, 'auto_*.zip')), key=os.path.getmtime, reverse=True)
     for old in autos[BACKUP_KEEP:]:
@@ -1060,6 +1303,8 @@ def auto_backup(name, tag):
     return dest
 
 def manual_backup(name):
+    # "Back up now" is exactly when you expect a clean copy, so save first.
+    flush_world(name)
     d = auto_backup(name, 'manual')
     return (True, "Backup saved: " + os.path.basename(d)) if d else (False, "Backup failed (world not found).")
 
@@ -1067,7 +1312,7 @@ def list_backups(name):
     s = get_server(name)
     if not s:
         return []
-    bdir = os.path.join(s['path'], 'backups')
+    bdir = backups_dir(s)
     if not os.path.isdir(bdir):
         return []
     out = []
@@ -1077,79 +1322,189 @@ def list_backups(name):
                     "when": datetime.datetime.fromtimestamp(os.path.getmtime(f)).strftime('%Y-%m-%d %H:%M')})
     return out
 
+def _safe_extract(zf, dest, only_tops=None):
+    """Extract, refusing any member that would land outside the server folder.
+    These are our own zips, but a backup file is a thing a person can copy in
+    from elsewhere, and 'it came from the backups folder' is not proof.
+
+    only_tops limits it to those top-level names. A backup holds the settings
+    as well as the world, but a restore is about the world - putting an old
+    server.properties back would silently undo settings you changed since, so
+    those files stay in the zip for you to take out by hand if you want them.
+    """
+    dest = os.path.abspath(dest)
+    written = 0
+    for m in zf.infolist():
+        name = m.filename.replace('\\', '/')
+        if name.endswith('/'):
+            continue
+        parts = [p for p in name.split('/') if p not in ('', '.', '..')]
+        if not parts:
+            continue
+        if only_tops is not None and parts[0] not in only_tops:
+            continue
+        target = os.path.abspath(os.path.join(dest, *parts))
+        if not target.startswith(dest + os.sep):
+            raise ValueError("backup contains a file that would land outside the world folder")
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with zf.open(m) as srcf, open(target, 'wb') as out:
+            shutil.copyfileobj(srcf, out)
+        written += 1
+    return written
+
+def prune_prerestore(server_path, keep=2):
+    """The copy taken aside before a restore is a safety net, not a permanent
+    resident - a few restores otherwise leave several worlds' worth on disk."""
+    olds = sorted(glob.glob(os.path.join(server_path, '*_prerestore_*')),
+                  key=os.path.getmtime, reverse=True)
+    for old in olds[keep:]:
+        try:
+            shutil.rmtree(old, ignore_errors=True)
+        except Exception:
+            pass
+
 def restore_backup(name, fname):
     s = get_server(name)
     if not s:
         return False, "Server not found."
     sport = read_properties(name).get('server-port')
-    if proc_for(name).running() or (sport and port_listening(sport)):
+    if proc_for(name).running() or (sport and port_listening(sport, max_age=0)):
         return False, "Stop the server first, then restore."
     fname = os.path.basename(fname)
-    zip_path = os.path.join(s['path'], 'backups', fname)
+    zip_path = os.path.join(backups_dir(s), fname)
     if not os.path.isfile(zip_path):
         return False, "Backup not found."
     level = read_properties(name).get('level-name', 'world')
     world = os.path.join(s['path'], level)
-    kept = ''
-    if os.path.isdir(world):
-        ts = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-        kept = os.path.join(s['path'], '%s_prerestore_%s' % (level, ts))
-        os.rename(world, kept)
+
+    # Every folder that belongs to this save moves aside together - restoring
+    # the overworld from one point in time next to a Nether from another is
+    # how you get a portal that opens somewhere unexpected.
+    ts = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    # Two restores inside the same second would otherwise be handed the same
+    # name to move the world to, and renaming onto an existing folder fails.
+    suffix, n = ts, 2
+    while any(os.path.exists(os.path.join(s['path'], '%s_prerestore_%s' % (os.path.basename(d), suffix)))
+              for d in world_dirs(s['path'], level)):
+        suffix = '%s_%d' % (ts, n)
+        n += 1
+    moved = []
+    for d in world_dirs(s['path'], level):
+        kept = os.path.join(s['path'], '%s_prerestore_%s' % (os.path.basename(d), suffix))
+        try:
+            os.rename(d, kept)
+            moved.append((d, kept))
+        except Exception as e:
+            for orig, back in reversed(moved):     # undo the ones that did move
+                try: os.rename(back, orig)
+                except Exception: pass
+            return False, "Could not set your world aside (%s). Nothing was changed." % str(e)[:70]
 
     def put_it_back(msg):
-        # The world was moved aside a moment ago and the restore did not work.
-        # Put it back under its own name - otherwise the next start would find
-        # no world folder and generate a brand new empty one over the top.
-        if kept and not os.path.isdir(world):
+        # The world moved aside a moment ago and the restore did not work. Put
+        # it back under its own name - otherwise the next start finds no world
+        # folder and generates a brand new empty one over the top.
+        stuck = []
+        for orig, back in moved:
+            # Whatever the half-finished restore managed to write is a fragment
+            # of a backup we have already given up on. The real world is the
+            # copy we set aside, so clear the fragment out of its way.
+            if os.path.isdir(orig):
+                shutil.rmtree(orig, ignore_errors=True)
             try:
-                os.rename(kept, world)
+                os.rename(back, orig)
             except Exception:
-                return False, msg + " Your old world is still safe, saved as '%s'." % os.path.basename(kept)
+                stuck.append(os.path.basename(back))
+        if stuck:
+            return False, msg + " Your old world is still safe, saved as '%s'." % ", ".join(stuck)
         return False, msg + " Your world is untouched."
 
+    tops = set([level] + [level + suf for suf in DIM_SUFFIXES])
     try:
         with zipfile.ZipFile(zip_path) as z:      # closed here - Windows keeps
-            z.extractall(s['path'])               # the file locked otherwise
+            _safe_extract(z, s['path'], only_tops=tops)   # the file locked otherwise
     except Exception as e:
         return put_it_back("Restore failed: %s." % e)
     if not os.path.isdir(world):
         return put_it_back("That backup didn't contain a world folder.")
+    prune_prerestore(s['path'])
     return True, "Restored '%s'. Start the server to load it." % fname
+
+BACKUP_EVERY = 2 * 3600
 
 def periodic_backups():
     while True:
         try:
-            time.sleep(2 * 3600)
+            time.sleep(BACKUP_EVERY)
             for s in list(CONFIG['servers']):
-                mp = SERVERS.get(s['name'])
+                name = s['name']
+                mp = SERVERS.get(name)
                 if mp and mp.running():
-                    try:
-                        mp.p.stdin.write('save-all flush\n'); mp.p.stdin.flush()
-                    except Exception:
-                        pass
-                    time.sleep(5)
-                    auto_backup(s['name'], 'periodic')
+                    flush_world(name)
+                    auto_backup(name, 'periodic')
+                    continue
+                # A world the panel adopted rather than started has no pipe to
+                # flush through, but it is still somebody's world and it was
+                # getting no backups at all. Take one anyway.
+                sport = read_properties(name).get('server-port')
+                if sport and port_listening(sport):
+                    auto_backup(name, 'periodic')
         except Exception:
             pass
+
+# --------------------------------------------------------------------------- console
+def tail_log(mp, since=None):
+    """Console lines. Given a cursor, only what has arrived since - the panel
+    polls this every 1.5s and used to re-send the whole console each time.
+
+    {seq} is the count of lines seen since launch; the caller sends back the
+    one it last saw. If it has fallen further behind than we still hold, we
+    say so and send everything we have rather than pretend it is continuous.
+    """
+    if not mp:
+        return {"lines": [], "seq": 0, "reset": True}
+    lines, seq = list(mp.log), mp.seq
+    try:
+        since = int(since)
+    except (TypeError, ValueError):
+        return {"lines": lines, "seq": seq, "reset": True}
+    if since > seq:                 # the world restarted and the count went back
+        return {"lines": lines, "seq": seq, "reset": True}
+    missed = seq - since
+    if missed > len(lines):         # we dropped lines they never saw
+        return {"lines": lines, "seq": seq, "reset": True}
+    return {"lines": lines[len(lines) - missed:] if missed else [],
+            "seq": seq, "reset": False}
+
+LOG_FILE_MAX = 400 * 1024
+
+def server_log_file(name, limit=2000):
+    """The end of the world's own logs/latest.log. The panel only holds what
+    has happened since it started the world, which is no help when you want to
+    know why the world stopped an hour ago."""
+    s = get_server(name)
+    if not s:
+        return {"ok": False, "lines": [], "note": "Server not found."}
+    fp = os.path.join(s['path'], 'logs', 'latest.log')
+    if not os.path.isfile(fp):
+        return {"ok": False, "lines": [],
+                "note": "This world has no logs/latest.log yet - it has not run."}
+    try:
+        size = os.path.getsize(fp)
+        with open(fp, 'r', encoding='utf-8', errors='replace') as f:
+            if size > LOG_FILE_MAX:
+                f.seek(size - LOG_FILE_MAX)
+                f.readline()          # drop the half line we landed in
+            lines = f.read().splitlines()
+    except Exception as e:
+        return {"ok": False, "lines": [], "note": "Could not read it (%s)." % str(e)[:70]}
+    return {"ok": True, "lines": lines[-limit:], "file": fp,
+            "truncated": size > LOG_FILE_MAX}
 
 # --------------------------------------------------------------------------- state
 def online_players(name):
     mp = SERVERS.get(name)
-    if not mp:
-        return []
-    out = []
-    for l in mp.log:
-        if 'Starting minecraft server' in l:
-            out = []
-        m = re.search(r']:\s+([A-Za-z0-9_]{2,16}) joined the game', l)
-        if m:
-            if m.group(1) not in out:
-                out.append(m.group(1))
-            continue
-        m = re.search(r']:\s+([A-Za-z0-9_]{2,16}) (?:left the game|lost connection)', l)
-        if m and m.group(1) in out:
-            out.remove(m.group(1))
-    return out
+    return list(mp.players) if mp else []
 
 def set_meta(name, group, address):
     s = get_server(name)
@@ -1230,9 +1585,67 @@ def build_state():
             "bank": {"total": bk["total"], "free": bk["free"]}}
 
 # --------------------------------------------------------------------------- HTTP
+# The panel listens on 127.0.0.1, which sounds private but is not. Any web page
+# your browser has open can send a request here, and the browser attaches it for
+# free. A plain HTML form posting text/plain is a "simple request" - no
+# preflight, so nothing stops it arriving - and its body is still valid JSON.
+# Without the checks below, a page in another tab could op a stranger, drop a
+# jar into your mods folder or delete a world, and you would never see it.
+ALLOWED_HOSTS = {"%s:%d" % (HOST, PORT), "localhost:%d" % PORT}
+ALLOWED_ORIGINS = {"http://%s:%d" % (HOST, PORT), "http://localhost:%d" % PORT}
+
+
+def host_ok(host):
+    """Only answer to the loopback address we serve on. A hostname pointed at
+    127.0.0.1 (DNS rebinding) arrives carrying its own name here, not ours."""
+    return (host or "").strip().lower() in ALLOWED_HOSTS
+
+
+def origin_ok(origin):
+    """No Origin is a same-origin GET or a direct request. An Origin that is
+    not ours is another site talking to us, whatever it says it wants."""
+    if not origin:
+        return True
+    o = origin.strip().lower()
+    if o == "null":          # sandboxed iframe or file:// - never the panel
+        return False
+    return o in ALLOWED_ORIGINS
+
+
+def referer_ok(referer):
+    if not referer:
+        return True
+    p = urllib.parse.urlsplit(referer.strip())
+    if not p.scheme or not p.netloc:
+        return False
+    return origin_ok("%s://%s" % (p.scheme.lower(), p.netloc.lower()))
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
+
+    def _guard(self, writing):
+        """True if this request may go ahead. Writes are held to the stricter
+        standard; reads are already covered by the browser's same-origin policy,
+        since the panel sends no CORS headers at all."""
+        if not host_ok(self.headers.get('Host')):
+            self._send(403, {"ok": False,
+                             "msg": "Hearth only answers to localhost."}); return False
+        if not origin_ok(self.headers.get('Origin')):
+            self._send(403, {"ok": False,
+                             "msg": "That request came from another site, so Hearth ignored it."}); return False
+        if writing:
+            # The panel's own fetch() sends this header. A form cannot set one,
+            # and a cross-origin fetch that tries is stopped by a preflight we
+            # never answer. This is the belt to the Origin check's braces.
+            if self.headers.get('X-Hearth') != '1':
+                self._send(403, {"ok": False,
+                                 "msg": "That request did not come from the Hearth panel, so it was ignored."}); return False
+            if not referer_ok(self.headers.get('Referer')):
+                self._send(403, {"ok": False,
+                                 "msg": "That request came from another site, so Hearth ignored it."}); return False
+        return True
 
     def _send(self, code, body, ctype='application/json', headers=None):
         if isinstance(body, (dict, list)):
@@ -1269,6 +1682,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, f.read(), ctype)
 
     def do_GET(self):
+        if not self._guard(False):
+            return
         path = self.path.split('?', 1)[0]
         q = {}
         if '?' in self.path:
@@ -1286,9 +1701,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"props": read_properties(q.get('name', ''))}); return
         if path == '/api/log':
             if q.get('tunnel') == '1':
-                self._send(200, {"lines": list(TUNNEL.log)}); return
-            mp = SERVERS.get(q.get('name', ''))
-            self._send(200, {"lines": list(mp.log) if mp else []}); return
+                self._send(200, tail_log(TUNNEL, q.get('since'))); return
+            if q.get('file') == '1':
+                self._send(200, server_log_file(q.get('name', ''))); return
+            self._send(200, tail_log(SERVERS.get(q.get('name', '')), q.get('since'))); return
         if path == '/api/mods':
             self._send(200, list_mods(q.get('name', ''))); return
         if path == '/api/backups':
@@ -1343,6 +1759,8 @@ class Handler(BaseHTTPRequestHandler):
         self._serve_file(path.lstrip('/'))
 
     def do_POST(self):
+        if not self._guard(True):
+            return
         path = self.path.split('?', 1)[0]
         b = self._json_body()
         name = b.get('name', '')
