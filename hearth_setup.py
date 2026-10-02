@@ -21,7 +21,7 @@ import urllib.request, urllib.error, zipfile, io
 BASE = os.path.dirname(os.path.abspath(__file__))
 NO_WINDOW = 0x08000000 if os.name == 'nt' else 0
 
-APP_VERSION = "1.5.0"      # only a fallback; the VERSION file is the truth
+APP_VERSION = "1.6.0"      # only a fallback; the VERSION file is the truth
 
 REPO = "SIllowet/hearth-panel"
 BRANCH = "main"
@@ -661,28 +661,55 @@ def _public_ip(timeout=6):
     return ''
 
 
+TAILSCALE_EXE = r"C:\Program Files\Tailscale\tailscale.exe"
+
+
+def _tailscale_exe():
+    return shutil.which('tailscale') or (TAILSCALE_EXE if os.path.exists(TAILSCALE_EXE) else None)
+
+
 def _installed():
     return {
         "playit": os.path.exists(os.path.join(BASE, 'playit.exe'))
                   or bool(shutil.which('playit')),
-        "tailscale": bool(shutil.which('tailscale'))
-                     or os.path.exists(r"C:\Program Files\Tailscale\tailscale.exe"),
+        "tailscale": bool(_tailscale_exe()),
     }
 
 
-def network_probe(audience='anyone'):
+def tailscale_ip():
+    """This PC's address on its Tailscale network, if it is on one - what
+    friends on the same tailnet type in. '' if Tailscale is absent or off."""
+    exe = _tailscale_exe()
+    if not exe:
+        return ''
+    for line in _run([exe, 'ip', '-4'], timeout=5).splitlines():
+        line = line.strip()
+        if _cgnat(line):              # tailnets live in 100.64.0.0/10
+            return line
+    return ''
+
+
+def network_probe(audience='anyone', quick=False):
     """
     Work out what this connection can actually do. Everything here is read-only.
     The one outside request is asking a public service what your address looks
     like from the internet - there is no way to know that from inside.
+
+    `quick` skips looking at the connection. Who is joining decides the answer
+    far more often than the connection does, so Setup recommends straight
+    away and only looks when asked.
     """
+    have = _installed()
+    if quick:
+        return {"ran": False, "verdict": "unknown", "facts": [], "installed": have,
+                "local_ip": local_ip(), "tailscale_ip": tailscale_ip() if have.get('tailscale') else '',
+                "recommend": recommend_for('unknown', have, audience)}
     hops = _hops()
     pub = _public_ip()
     priv_hops = [h for h in hops if _private(h)]
 
     behind_cgnat = _cgnat(pub) or any(_cgnat(h) for h in hops)
     double_nat = len(priv_hops) >= 2
-    have = _installed()
 
     facts, verdict = [], ''
     if not pub and not hops:
@@ -719,6 +746,7 @@ def network_probe(audience='anyone'):
         "facts": facts,
         "installed": have,
         "local_ip": local_ip(),
+        "tailscale_ip": tailscale_ip() if have.get('tailscale') else '',
         "double_nat": double_nat,
         "cgnat": behind_cgnat,
         "hops": len(hops),
@@ -771,8 +799,9 @@ def recommend_for(verdict, have, audience='anyone'):
                            "rather not rely on anyone else.",
                 "alt": "forward"}
     return {"pick": "playit",
-            "because": "It works on the widest range of connections.",
-            "alt": None}
+            "because": "One address that works for anyone, wherever they are - "
+                       "nothing to change on your router, on any kind of connection.",
+            "alt": "forward"}
 
 
 # ------------------------------------------------------------ getting playit

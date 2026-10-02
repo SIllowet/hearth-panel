@@ -34,7 +34,8 @@ taskbar, so it minimises and closes like any other program.
 - **World icons** — the little picture next to your server in the Minecraft multiplayer list. Any image, auto-resized to 64×64.
 - **Backups** — automatic on every stop and every 2 hours (keeps the last 15), plus "Back up now" and one-click restore.
 - **An AI that lives in your server** — optional. You name it, you pick its brain (a free local model or any paid API), and it talks to players in chat and runs commands for people you trust. [Details below.](#the-ai)
-- **Public address via playit.gg** — optional. Downloads the tunnel agent for you, checks it is really playit's, and runs it alongside your world so friends outside your network can join.
+- **Public address via playit.gg** — optional, and one button: Hearth downloads the agent, checks it is really playit's, links it to your account when you approve it in the browser, finds each world's address by itself, and opens the tunnel whenever a world starts.
+- **Shows every way in** — Home lists the address for friends anywhere, on your Tailscale network, and on your wifi, each one tap to copy.
 - **Tells you what is missing** — Hearth checks what it needs when it starts and explains anything absent in plain words, with a link that fixes it. It never installs anything on your behalf.
 - **Helps you pick how people join** — say who is coming, and Hearth looks at your connection and recommends playit, Tailscale or forwarding a port, with a reason. Some connections cannot forward a port at all, and it will tell you so.
 - **Its own window** — not a browser tab. Own taskbar button, and it can put a shortcut on your desktop.
@@ -132,9 +133,13 @@ panel again and it will appear in the sidebar.
 
 There is no single right answer, and Hearth will work it out with you.
 
-Open **Setup → Letting people in**, say who is joining, and press
-**Check my connection**. Hearth looks at your network and recommends one of the
-options below, with a reason. Two things decide it, and neither is guessable:
+Open **Setup → Letting people in** (or press **Set it up** on Home) and say who
+is joining. Hearth recommends one of the options below straight away, with a
+reason. Home then lists every address that works right now — for friends
+anywhere, on your Tailscale network, and on your wifi — each one tap to copy.
+
+If you'd rather forward a port yourself, press **Check my connection** first.
+Two things decide whether that can work, and neither is guessable:
 
 - **Some providers hand out shared addresses** (carrier-grade NAT). If yours
   does, forwarding a port cannot work no matter what you change on the router.
@@ -150,27 +155,34 @@ only way to find that out. Nothing is stored or sent anywhere else.
 **Just you, on this PC.** Connect to `localhost`. Nothing to set up.
 
 **Everyone on your Wi-Fi.** They connect to this PC's local address, which
-Setup shows you. You may need to allow Java through Windows Firewall the first
-time.
+Home and Setup show you. You may need to allow Java through Windows Firewall the
+first time.
 
 **A few friends, regularly.** [Tailscale](https://tailscale.com/download) puts
 you and them on one private network, as though you were in the same house.
 Nothing is exposed to the internet and your home address stays private.
 Everyone installs one small app, so it suits a regular group rather than
-strangers.
+strangers. Once Tailscale is running, Home shows this PC's Tailscale address.
 
 **Anyone you send the address to.** A tunnel is the option that works on every
 connection, including the ones that cannot forward a port.
 [playit.gg](https://playit.gg) is free and needs no router changes:
 
-1. In Setup, press **Get it for me**. Hearth downloads the agent from playit's
-   own signed release and checks the signature before keeping it. About 4 MB,
-   saved next to Hearth.
-2. Make a playit.gg account, add an agent, and copy its **secret key**.
-3. Paste the key into the box in Setup and press **Save**. Hearth writes it into
-   your settings — there is no config file to edit.
-4. Light the hearth in **Worlds**. The tunnel starts with your world, and the
-   address becomes a tap-to-copy button to hand to your friends.
+1. In Setup, press **Set up playit**. Hearth downloads the agent from playit's
+   own signed release and checks the signature before keeping it (about 4 MB,
+   saved next to Hearth), then opens a playit.gg page in your browser.
+2. Sign in there — or make a free account — and press **Approve**. Hearth gets
+   the agent's key by itself; there is nothing to copy or paste.
+3. If a world has no address yet, Setup says exactly what to add on playit.gg:
+   **Add tunnel → Minecraft Java**, with that world's port. Hearth notices the
+   new tunnel and fills the address in by itself.
+4. Light the hearth. The tunnel opens with your world, and Home shows the
+   address as a tap-to-copy button to hand to your friends.
+
+Already have a playit secret key? Setup still takes one under **Already have a
+playit secret key?**. An address you type into a world's **Edit** box yourself —
+a custom domain, say — is left alone; Hearth only keeps the ones it filled in up
+to date.
 
 **Forwarding a port yourself.** No third party involved, but it is the most
 fiddly option and it publishes your home address to everyone who joins. Send
@@ -339,6 +351,7 @@ Created automatically on first run, next to `app.py`. Stop the panel before edit
 | `protected` | Names that can't be deleted from the panel — a guard for your main world. |
 | `curseforgeKey` | Your free CurseForge API key, so the Mods tab can search CurseForge. Optional — Modrinth needs no key. Easiest set from the Mods tab. |
 | `bank` | The tunnel bank, described above. Also editable from the UI. |
+| `playit` | The playit agent's secret key and where the program is. Written by Setup when you link playit — you never need to touch it. |
 
 **`config.json` holds your playit secret and your CurseForge key. It is in
 `.gitignore` — keep it that way, and don't paste it anywhere public.** Anyone with

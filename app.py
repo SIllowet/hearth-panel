@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Hearth - Minecraft Server Control Panel (local, localhost-only)
-import json, os, subprocess, threading, time, glob, shutil, urllib.request, urllib.parse, hashlib, re, webbrowser, socket, datetime, zipfile, base64, struct, secrets
+import json, os, subprocess, threading, time, glob, shutil, urllib.request, urllib.error, urllib.parse, hashlib, re, webbrowser, socket, datetime, zipfile, base64, struct, secrets
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -290,6 +290,12 @@ def start_server(name, auto=False):
         proc = mp.p
     watcher = attach_ai(name, mp)
     threading.Thread(target=_run_world, args=(name, mp, proc, watcher), daemon=True).start()
+    # The tunnel is what lets friends outside the house in. It used to need its
+    # own click on Home, which is easy to miss when friends are waiting.
+    if account_tunnel() and not tunnel_alive():
+        ok, _ = start_tunnel(name)
+        if ok:
+            return True, "Starting " + name + " - and opening the public door."
     return True, "Starting " + name + "..."
 
 def _run_world(name, mp, proc, watcher):
@@ -640,11 +646,22 @@ def ensure_rcon(name):
     })
 
 def account_tunnel():
-    for s in CONFIG['servers']:
-        t = s.get('tunnel') or {}
-        if t.get('secret'):
-            return t
-    return None
+    """The playit agent this PC runs: its secret, and where the program is.
+    Kept once for the whole panel; older setups kept it on a world, and those
+    still count."""
+    t = CONFIG.get('playit') or {}
+    if t.get('secret'):
+        t = dict(t)
+    else:
+        t = next((dict(s['tunnel']) for s in CONFIG['servers']
+                  if (s.get('tunnel') or {}).get('secret')), None)
+    if not t:
+        return None
+    if not t.get('exe') or not os.path.exists(t['exe']):
+        local = os.path.join(BASE, 'playit.exe')
+        if os.path.exists(local):
+            t['exe'] = local
+    return t
 
 def set_tunnel_secret(secret, name=None):
     """
@@ -656,18 +673,16 @@ def set_tunnel_secret(secret, name=None):
     if len(secret) < 20 or not re.match(r'^[A-Za-z0-9+/=_-]+$', secret):
         return False, ("That does not look like a playit secret. It is a long "
                        "line of letters and numbers from your playit account.")
+    t = {'secret': secret}
     exe = os.path.join(BASE, 'playit.exe')
-    if not os.path.exists(exe):
-        exe = (account_tunnel() or {}).get('exe', '')
-    targets = [t for t in CONFIG.get('servers', []) if not name or t.get('name') == name]
-    if not targets:
-        return False, "Make a world first, then Hearth knows where to put this."
-    for srv in targets:
-        t = srv.get('tunnel') or {}
-        t['secret'] = secret
-        if exe:
-            t['exe'] = exe
-        srv['tunnel'] = t
+    if os.path.exists(exe):
+        t['exe'] = exe
+    CONFIG['playit'] = t
+    # One agent serves every world. A secret left on a world from an older
+    # setup would be found first by an older Hearth, so keep them the same.
+    for srv in CONFIG.get('servers', []):
+        if (srv.get('tunnel') or {}).get('secret'):
+            srv['tunnel']['secret'] = secret
     save_config(CONFIG)
     return True, "Saved. Light the hearth and the tunnel starts with it."
 
@@ -745,6 +760,8 @@ def start_tunnel(name=None):
     if not exe or not os.path.exists(exe):
         return False, "playit.exe not found."
     TUNNEL.log.clear()
+    # Once it has connected, see which addresses the account has for our worlds.
+    threading.Thread(target=lambda: (time.sleep(8), playit_sync()), daemon=True).start()
     args, env, note = playit_launch(exe, t['secret'])
     if note:
         TUNNEL.log.append(note)
@@ -772,6 +789,173 @@ def stop_tunnel():
     except Exception:
         pass
     return True, "Tunnel closed."
+
+# --------------------------------------------------------------------------- playit account
+# Setting playit up used to be seven steps on two websites: make an account,
+# add an agent, copy its secret, paste it here, add a tunnel, copy its address,
+# paste that into the world. playit's own agent links itself with a "claim"
+# instead - it shows a link, you approve it in the browser, and the secret
+# arrives by itself - and with that secret it can read which addresses it
+# serves. Hearth does both the same way, through the same API the agent uses.
+PLAYIT_API = 'https://api.playit.gg'
+CLAIM_TIMEOUT = 15 * 60         # how long a claim link stays worth waiting on
+CLAIM = {"code": None, "state": "idle", "url": "", "msg": "", "phase": ""}
+PLAYIT_INFO = {"at": 0, "tunnels": [], "pending": [], "missing": [], "error": "", "account": ""}
+
+def _playit_call(path, body, secret=None, timeout=15):
+    """POST to playit's API. Returns (status, data): status is 'success',
+    'fail' (a reason playit gives, in data) or 'error'."""
+    headers = {'Content-Type': 'application/json', 'User-Agent': UA}
+    if secret:
+        headers['Authorization'] = 'Agent-Key ' + secret.strip()
+    req = urllib.request.Request(PLAYIT_API + path, data=json.dumps(body).encode('utf-8'),
+                                 headers=headers, method='POST')
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read()
+    except urllib.error.HTTPError as e:
+        raw = e.read()               # playit answers refusals with a JSON body too
+    res = json.loads(raw.decode('utf-8'))
+    return res.get('status', 'error'), res.get('data')
+
+def _hearth_version():
+    try:
+        return open(os.path.join(BASE, 'VERSION'), encoding='utf-8').read().strip()
+    except Exception:
+        return '?'
+
+def playit_claim_start():
+    """Make a claim link for the person to approve, and wait for it in the background."""
+    code = secrets.token_hex(5)
+    CLAIM.update(code=code, state='waiting', url='https://playit.gg/claim/' + code,
+                 msg='', phase='WaitingForUserVisit')
+    threading.Thread(target=_claim_worker, args=(code,), daemon=True).start()
+    # Opened from here rather than the page: the panel's window is an app
+    # window, and playit wants your everyday browser, where you're signed in.
+    if not os.environ.get('HEARTH_NO_OPEN'):
+        try:
+            webbrowser.open(CLAIM['url'])
+        except Exception:
+            pass
+    return {"ok": True, "url": CLAIM['url']}
+
+def playit_claim_cancel():
+    CLAIM.update(code=None, state='idle', url='', msg='', phase='')
+    return True, "Called off."
+
+def _claim_still(code):
+    return CLAIM.get('code') == code
+
+def _claim_end(code, state, msg):
+    if _claim_still(code):
+        CLAIM.update(state=state, msg=msg)
+
+def _claim_worker(code, poll=2.0):
+    deadline = time.time() + CLAIM_TIMEOUT
+    body = {"code": code, "agent_type": "self-managed",
+            "version": "Hearth %s" % _hearth_version()}
+    # 1. Wait for them to open the link and approve it.
+    while _claim_still(code):
+        if time.time() > deadline:
+            return _claim_end(code, 'failed', "The link ran out before it was approved. Try again.")
+        try:
+            st, data = _playit_call('/claim/setup', body)
+        except Exception:
+            time.sleep(poll); continue
+        if st == 'success' and data == 'UserAccepted':
+            break
+        if st == 'success' and data == 'UserRejected':
+            return _claim_end(code, 'failed', "It was turned down on playit.gg. Try again if that was a slip.")
+        if st == 'success':
+            CLAIM['phase'] = data
+        elif st == 'fail':
+            return _claim_end(code, 'failed', "playit didn't accept the link (%s). Try again." % data)
+        time.sleep(poll)
+    # 2. Swap the approved claim for the agent's secret.
+    while _claim_still(code):
+        if time.time() > deadline:
+            return _claim_end(code, 'failed', "playit approved it but never handed the key over. Try again.")
+        try:
+            st, data = _playit_call('/claim/exchange', {"code": code})
+        except Exception:
+            time.sleep(poll); continue
+        if st == 'success' and isinstance(data, dict) and data.get('secret_key'):
+            ok, msg = set_tunnel_secret(data['secret_key'])
+            if not ok:
+                return _claim_end(code, 'failed', msg)
+            _claim_end(code, 'done', "Linked to your playit account.")
+            if any(world_busy(s['name']) for s in CONFIG['servers']):
+                start_tunnel()
+            playit_sync()
+            return
+        if st == 'fail' and data not in ('NotAccepted', 'NotSetup'):
+            return _claim_end(code, 'failed', "playit didn't hand the key over (%s). Try again." % data)
+        time.sleep(poll)
+
+def _tunnel_local_port(t):
+    fields = {f.get('name'): f.get('value') for f in ((t.get('agent_config') or {}).get('fields') or [])}
+    lp = str(fields.get('local_port') or '')
+    if lp.isdigit():
+        return int(lp)
+    # Minecraft tunnels serve the game's own port unless told otherwise.
+    return 25565 if (t.get('tunnel_type') or '') == 'minecraft-java' else None
+
+def playit_sync():
+    """Ask playit which addresses this agent serves, and give each world the
+    one pointed at its port. An address someone typed in themselves is left
+    alone - only ones Hearth filled in are kept up to date."""
+    t = account_tunnel()
+    if not t:
+        PLAYIT_INFO.update(at=time.time(), tunnels=[], pending=[], missing=[],
+                           error="Not linked to a playit account yet.")
+        return False, PLAYIT_INFO['error']
+    try:
+        st, data = _playit_call('/v1/agents/rundata', {}, secret=t['secret'])
+    except Exception:
+        PLAYIT_INFO.update(at=time.time(), error="Couldn't reach playit just now. Check this PC "
+                                                 "is online, then press Look again.")
+        return False, PLAYIT_INFO['error']
+    if st != 'success' or not isinstance(data, dict):
+        PLAYIT_INFO.update(at=time.time(), error="playit didn't recognise this PC's key. Link it again.")
+        return False, PLAYIT_INFO['error']
+    tunnels = []
+    for tn in data.get('tunnels') or []:
+        tunnels.append({"address": tn.get('display_address') or '',
+                        "localPort": _tunnel_local_port(tn),
+                        "type": tn.get('tunnel_type') or '',
+                        "name": tn.get('name') or '',
+                        "off": tn.get('disabled_reason') or ''})
+    pending = [(p.get('name') or 'tunnel') + ': ' + (p.get('status_msg') or 'being set up')
+               for p in data.get('pending') or []]
+    changed, missing = [], []
+    for srv in CONFIG['servers']:
+        port = read_properties(srv['name']).get('server-port') or ''
+        port = int(port) if port.isdigit() else None
+        hit = next((x for x in tunnels if port and x['localPort'] == port
+                    and x['address'] and not x['off']), None)
+        tun = srv.setdefault('tunnel', {})
+        if not hit:
+            if not tun.get('address'):
+                missing.append({"name": srv['name'], "port": port})
+            continue
+        if tun.get('address') and not tun.get('auto'):
+            continue                  # theirs - a custom domain, perhaps
+        if tun.get('address') != hit['address']:
+            tun['address'], tun['auto'] = hit['address'], True
+            changed.append(srv['name'])
+    if changed:
+        save_config(CONFIG)
+    PLAYIT_INFO.update(at=time.time(), tunnels=tunnels, pending=pending, missing=missing,
+                       error='', account=((data.get('permissions') or {}).get('account_status') or ''))
+    return True, ("Found the address for %s." % ', '.join(changed)) if changed else "Up to date."
+
+def playit_state():
+    st = hearth_setup.playit_status() if hearth_setup else {"exists": False}
+    st["linked"] = bool(account_tunnel())
+    st["running"] = tunnel_alive()
+    st["claim"] = {k: CLAIM[k] for k in ('state', 'url', 'msg', 'phase')}
+    st["info"] = dict(PLAYIT_INFO)
+    return st
 
 # --------------------------------------------------------------------------- properties
 def read_properties(name):
@@ -1878,7 +2062,9 @@ def set_meta(name, group, address):
     if group is not None:
         s['group'] = group
     if address is not None:
-        s.setdefault('tunnel', {})['address'] = address
+        tun = s.setdefault('tunnel', {})
+        tun['address'] = address.strip()
+        tun['auto'] = False           # typed in by hand - playit sync leaves it be
     save_config(CONFIG)
     return True, "Saved."
 
@@ -1920,6 +2106,22 @@ def remove_icon(name):
         return False, "Couldn't remove the icon: " + str(e)
     return True, "Icon removed. Restart this world to clear it in the server list."
 
+# The addresses this PC can be reached at, for the "how do friends join" card.
+# Asked on every poll, but they change rarely and Tailscale's costs a process.
+_reach_cache = {"t": 0, "data": {"lan": "", "tailscale": ""}}
+def reach_addresses(max_age=30):
+    if time.time() - _reach_cache["t"] > max_age and hearth_setup:
+        data = {"lan": "", "tailscale": ""}
+        try:
+            data["lan"] = hearth_setup.local_ip()
+            if data["lan"].startswith('127.'):
+                data["lan"] = ''
+            data["tailscale"] = hearth_setup.tailscale_ip()
+        except Exception:
+            pass
+        _reach_cache.update(t=time.time(), data=data)
+    return dict(_reach_cache["data"])
+
 def build_state():
     servers = []
     for s in CONFIG['servers']:
@@ -1949,6 +2151,7 @@ def build_state():
     bk = bank_status()
     return {"servers": servers, "active": CONFIG.get('active'),
             "tunnel": {"running": tunnel_alive(), "available": bool(account_tunnel())},
+            "reach": reach_addresses(),
             "bank": {"total": bk["total"], "free": bk["free"]}}
 
 # --------------------------------------------------------------------------- HTTP
@@ -2092,16 +2295,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, {"exists": False}); return
             self._send(200, hearth_setup.shortcut_status()); return
         if path == '/api/playit':
-            if not hearth_setup:
-                self._send(200, {"exists": False}); return
-            st = hearth_setup.playit_status()
-            st["linked"] = bool(account_tunnel())
-            self._send(200, st); return
+            self._send(200, playit_state()); return
         if path == '/api/network':
             if not hearth_setup:
                 self._send(200, {"ran": False}); return
             aud = q.get('audience', 'anyone')
-            self._send(200, hearth_setup.network_probe(aud)); return
+            self._send(200, hearth_setup.network_probe(aud, quick=q.get('quick') == '1')); return
         if path == '/api/mods/browse':
             self._send(200, browse_mods(q.get('name', ''), q.get('source', 'modrinth'),
                                         q.get('q', ''), q.get('page', 0) or 0)); return
@@ -2147,6 +2346,8 @@ class Handler(BaseHTTPRequestHandler):
             '/api/properties/save':lambda: write_properties(name, b.get('props', {})),
             '/api/tunnel/start':   lambda: start_tunnel(name or CONFIG.get('active')),
             '/api/tunnel/stop':    lambda: stop_tunnel(),
+            '/api/playit/sync':    lambda: playit_sync(),
+            '/api/playit/claim/cancel': lambda: playit_claim_cancel(),
             '/api/mods/add':       lambda: add_mod(name, b.get('url', '')),
             '/api/mods/remove':    lambda: remove_mod(name, b.get('file', '')),
             '/api/mods/install':   lambda: install_mod(name, b.get('source', 'modrinth'), b.get('project', ''),
@@ -2192,6 +2393,8 @@ class Handler(BaseHTTPRequestHandler):
             if not hearth_setup:
                 self._send(200, {"ok": False, "msg": "unavailable"}); return
             self._send(200, hearth_setup.fetch_playit()); return
+        if path == '/api/playit/claim':
+            self._send(200, playit_claim_start()); return
         if path == '/api/playit/secret':
             # do_POST already read the body into b - reading it again would
             # block forever waiting for bytes that were consumed.
