@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Hearth - Minecraft Server Control Panel (local, localhost-only)
-import json, os, subprocess, threading, time, glob, shutil, urllib.request, urllib.parse, hashlib, re, webbrowser, socket, datetime, zipfile, base64
+import json, os, subprocess, threading, time, glob, shutil, urllib.request, urllib.parse, hashlib, re, webbrowser, socket, datetime, zipfile, base64, struct, secrets
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -94,6 +94,13 @@ class ManagedProc:
         # double-click on Start arrives as two requests at once - without this
         # both would look at a stopped world and both would launch a jar.
         self.lock = threading.Lock()
+        # Set when someone asked the world to stop - the Stop button, or /stop
+        # typed in the console or in game. A world that ends without this
+        # being set did not stop, it crashed.
+        self.stopping = False
+        self.crash = None         # what we worked out the last time it died on its own
+        self.restarts = deque()   # when we last brought it back by ourselves
+        self.restart_token = 0    # bumped to call off a restart that is counting down
     def running(self):
         return self.p is not None and self.p.poll() is None
 
@@ -107,13 +114,29 @@ def proc_for(name):
             SERVERS[name] = ManagedProc()
         return SERVERS[name]
 
-def find_java():
-    cands = sorted(glob.glob(r"C:\Program Files\Microsoft\jdk-*"))
-    for c in reversed(cands):
-        exe = os.path.join(c, 'bin', 'java.exe')
-        if os.path.exists(exe):
-            return exe
-    return 'java'
+def find_java(need=0):
+    """Which java to launch a world with.
+
+    Given the Java version a Minecraft build asks for, the oldest one here that
+    is new enough - the same pick Mojang's own launcher makes, and old worlds
+    and old Paper builds can refuse a Java much newer than they were made for.
+    Without one, the newest. Plain 'java' if there is nothing to choose from.
+    """
+    if hearth_setup:
+        cands = hearth_setup.java_candidates()
+    else:
+        cands = [shutil.which('java')] if shutil.which('java') else []
+    if not cands:
+        return 'java'
+    known = [(java_major(c), c) for c in cands]
+    known = [k for k in known if k[0]]
+    if not known:
+        return cands[0]
+    if need:
+        fits = sorted((k for k in known if k[0] >= need), key=lambda k: k[0])
+        if fits:
+            return fits[0][1]
+    return max(known, key=lambda k: k[0])[1]
 
 def _probe_port(port):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -203,6 +226,9 @@ def _reader(mp, stream, watcher=None):
             track_players(mp.players, line)
             if 'Done (' in line:
                 mp.ready = True
+            if 'Stopping the server' in line:
+                # /stop typed in game by an op - asked for, not a crash
+                mp.stopping = True
             if watcher:
                 try:
                     watcher(line)
@@ -211,11 +237,23 @@ def _reader(mp, stream, watcher=None):
     except Exception:
         pass
 
-def start_server(name):
+def start_server(name, auto=False):
+    """Launch a world. `auto` is a restart after a crash - it keeps the crash
+    on show and counts towards the limit; a start from the panel clears both."""
     s = get_server(name)
     if not s:
         return False, "Server not found."
     mp = proc_for(name)
+    # Which Java this version wants can take a trip to Mojang to find out, so
+    # it is settled before the lock rather than holding everyone else up.
+    version = server_version(s)
+    need = java_need(version)
+    java = find_java(need)
+    have = java_major(java)
+    if need and have and have < need:
+        return False, ("Minecraft %s needs Java %d, but the newest Java on this PC is %d. "
+                       "Get Java %d from adoptium.net (the .msi for Windows x64), then start "
+                       "it again - Hearth will find it by itself." % (version, need, have, need))
     # Everything from "is it running?" to the jar actually being launched has to
     # happen as one step. A second request that squeezed in between would see a
     # stopped world and launch a second jar onto the same save - that is what
@@ -231,11 +269,17 @@ def start_server(name):
         jar = os.path.join(path, 'server.jar')
         if not os.path.exists(jar):
             return False, "server.jar missing in " + path
-        java = find_java()
+        ensure_rcon(name)
         mem = CONFIG.get('memory') or {}
         args = [java, '-Xms' + str(mem.get('min', '2G')), '-Xmx' + str(mem.get('max', '4G')),
                 '-XX:+UseG1GC', '-jar', 'server.jar', 'nogui']
         mp.log.clear(); mp.ready = False; mp.seq = 0; del mp.players[:]
+        mp.stopping = False
+        mp.restart_token += 1             # a start by hand calls off one counting down
+        if not auto:
+            mp.crash = None
+            mp.restarts.clear()
+        mp.log.append("[Hearth] Starting with Java %s - %s" % (have or '?', java)); mp.seq += 1
         forget_port(sport)
         try:
             mp.p = subprocess.Popen(args, cwd=path, stdin=subprocess.PIPE,
@@ -243,9 +287,156 @@ def start_server(name):
                                     text=True, bufsize=1, creationflags=NO_WINDOW)
         except Exception as e:
             return False, "Failed to start: " + str(e)
+        proc = mp.p
     watcher = attach_ai(name, mp)
-    threading.Thread(target=_reader, args=(mp, mp.p.stdout, watcher), daemon=True).start()
+    threading.Thread(target=_run_world, args=(name, mp, proc, watcher), daemon=True).start()
     return True, "Starting " + name + "..."
+
+def _run_world(name, mp, proc, watcher):
+    """Follow a world's console until it ends, then work out whether it meant to."""
+    _reader(mp, proc.stdout, watcher)
+    try:
+        code = proc.wait(timeout=60)
+    except Exception:
+        code = None
+    on_world_exit(name, mp, proc, code)
+
+# --------------------------------------------------------------------------- crashes
+CRASH_RESTART_DELAY = 10       # seconds before trying again
+CRASH_RESTART_LIMIT = 3        # this many tries...
+CRASH_RESTART_WINDOW = 600     # ...inside ten minutes, then leave it off
+
+def diagnose_crash(lines):
+    """The last of the console, turned into a reason a person can act on.
+
+    `retry` says whether starting it again could help. Anything that will fail
+    the same way every time - wrong Java, a mod built for another version, a
+    port somebody else holds - is False, so Hearth does not sit there
+    relaunching a world that cannot boot.
+    """
+    text = '\n'.join(lines)
+    low = text.lower()
+    m = re.search(r'saved to:\s*(?:#@!@#\s*)?(\S[^\r\n]*)', text, re.I)
+    see = (" The full crash report is crash-reports\\%s in the world's folder."
+           % re.split(r'[\\/]', m.group(1).strip())[-1]) if m else ''
+
+    def out(why, fix, retry):
+        return {"why": why, "fix": fix + see, "retry": retry}
+
+    m = re.search(r'class file version (\d+)', text)
+    if m or 'unsupportedclassversionerror' in low:
+        need = int(m.group(1)) - 44 if m else 0
+        java = ("Java %d" % need) if need > 8 else "a newer Java"
+        return out("It needs %s, and the one it was started with is older." % java,
+                   "Install %s from adoptium.net, then start it again - Hearth picks "
+                   "it up by itself." % java, False)
+    if ('could not reserve enough space' in low or 'invalid maximum heap size' in low
+            or 'invalid initial heap size' in low or 'initial heap size set to a larger value' in low):
+        return out("Java couldn't set aside the memory Hearth asked for.",
+                   "Lower memory.max in config.json (try 2G), or make sure the Java "
+                   "you installed is the 64-bit one.", False)
+    if 'outofmemoryerror' in low:
+        return out("It ran out of memory.",
+                   "Raise memory.max in config.json (modded worlds usually want 6G or "
+                   "more), or lower the view distance.", True)
+    if 'failed to bind to port' in low:
+        return out("Its port is already taken by something else.",
+                   "Another server - maybe another copy of this one - is probably still "
+                   "running. Close it, or change server-port in Settings.", False)
+    if 'session.lock' in low:
+        return out("This world is already open in another server.",
+                   "Close the other copy first. Two servers on one world overwrite each "
+                   "other's saves.", False)
+    if 'agree to the eula' in low:
+        return out("Minecraft's EULA hasn't been accepted for this world.",
+                   "Open eula.txt in the world's folder and change it to eula=true.", False)
+    if ('incompatible mod' in low or 'mod resolution encountered' in low
+            or 'mixinapplyerror' in low or 'mixintransformererror' in low
+            or ('mixin' in low and 'apply failed' in low)):
+        detail = next((l.strip(' \t-') for l in lines
+                       if ' requires ' in l or 'which is missing' in l or 'is incompatible' in l), '')
+        why = "One of the mods doesn't fit - usually it was built for another Minecraft version or needs another mod."
+        if detail:
+            why += ' It says: "%s"' % detail[-200:]
+        return out(why, "Update or remove that mod in the Mods tab, then start it again.", False)
+    if 'unable to access jarfile' in low or 'invalid or corrupt jarfile' in low:
+        return out("server.jar is missing or damaged.",
+                   "Roll back in the Version tab, or switch the loader there to download "
+                   "a fresh one.", False)
+    if 'single server tick took' in low or 'considering it to be crashed' in low:
+        return out("It froze for over a minute, so Minecraft's own watchdog shut it down.",
+                   "That's often a huge farm or a heavy mod. If it keeps happening, the "
+                   "crash report says what it was stuck on.", True)
+    if 'exception in server tick loop' in low or 'encountered an unexpected exception' in low:
+        return out("Minecraft hit an error while running and stopped.",
+                   "A mod or plugin is the usual cause.", True)
+    return out("It stopped without saying why.",
+               "Console -> Open the full log file may say more.", True)
+
+def on_world_exit(name, mp, proc, code):
+    """A world's process has ended. If nobody asked it to, say why it crashed,
+    and if it was up and running when it fell over, bring it back - a few
+    times, then stop trying rather than loop on something that is broken."""
+    if mp.p is not proc or mp.stopping:
+        return
+    tail = list(mp.log)[-200:]
+    diag = diagnose_crash(tail)
+    crash = {"at": time.time(), "code": code, "duringPlay": mp.ready,
+             "why": diag['why'], "fix": diag['fix'], "tail": tail[-15:],
+             "restarting": False, "attempt": 0, "limit": CRASH_RESTART_LIMIT, "gaveUp": False}
+    mp.log.append("[Hearth] %s stopped on its own%s. %s" % (
+        name, (" (exit code %s)" % code) if code is not None else '', diag['why']))
+    mp.seq += 1
+    s = get_server(name)
+    if s and s.get('autoRestart', True) and mp.ready and diag['retry']:
+        now = time.time()
+        while mp.restarts and now - mp.restarts[0] > CRASH_RESTART_WINDOW:
+            mp.restarts.popleft()
+        if len(mp.restarts) < CRASH_RESTART_LIMIT:
+            mp.restarts.append(now)
+            crash['restarting'] = True
+            crash['attempt'] = len(mp.restarts)
+            mp.restart_token += 1
+            mp.log.append("[Hearth] Starting it again in %d seconds (try %d of %d)."
+                          % (CRASH_RESTART_DELAY, crash['attempt'], CRASH_RESTART_LIMIT))
+            mp.seq += 1
+            t = threading.Timer(CRASH_RESTART_DELAY, _restart_after_crash,
+                                args=(name, mp, mp.restart_token))
+            t.daemon = True
+            mp.crash = crash
+            t.start()
+            return
+        crash['gaveUp'] = True
+        mp.log.append("[Hearth] It has crashed %d times in %d minutes, so Hearth is leaving "
+                      "it off until you start it." % (CRASH_RESTART_LIMIT, CRASH_RESTART_WINDOW // 60))
+        mp.seq += 1
+    mp.crash = crash
+
+def _restart_after_crash(name, mp, token):
+    if mp.restart_token != token or mp.running():
+        return                       # called off, or someone already started it
+    if mp.crash:
+        mp.crash['restarting'] = False
+    ok, msg = start_server(name, auto=True)
+    if not ok:
+        mp.log.append("[Hearth] Couldn't start it again: " + msg); mp.seq += 1
+        if mp.crash:
+            mp.crash['gaveUp'] = True
+
+def set_auto_restart(name, on):
+    s = get_server(name)
+    if not s:
+        return False, "Server not found."
+    s['autoRestart'] = bool(on)
+    save_config(CONFIG)
+    return True, ("Hearth will bring %s back if it crashes." % name if on
+                  else "Hearth will leave %s off if it crashes." % name)
+
+def clear_crash(name):
+    mp = SERVERS.get(name)
+    if mp:
+        mp.crash = None
+    return True, "OK."
 
 def attach_ai(name, mp):
     """Hand the companion this world's console: it reads every line, and talks and
@@ -268,7 +459,21 @@ def attach_ai(name, mp):
 def send_command(name, cmd):
     mp = proc_for(name)
     if not mp.running():
-        return False, "Server is not running."
+        # Not started by this run of the panel - but if it is up and has RCON
+        # on, it still takes commands.
+        rc = rcon_for(name)
+        if not rc:
+            return False, "Server is not running."
+        try:
+            reply = rcon(rc[0], rc[1], cmd.strip().lstrip('/'))
+        except Exception as e:
+            return False, "Could not send command: " + _rcon_why(e)
+        mp.log.append('> ' + cmd.strip()); mp.seq += 1
+        for line in (reply or '').splitlines():
+            mp.log.append(line); mp.seq += 1
+        return True, "Sent: " + cmd
+    if cmd.strip().lstrip('/').split(' ', 1)[0].lower() in ('stop', 'restart'):
+        mp.stopping = True               # asked for - don't treat it as a crash
     try:
         mp.p.stdin.write(cmd.strip() + '\n')
         mp.p.stdin.flush()
@@ -279,18 +484,44 @@ def send_command(name, cmd):
 def stop_server(name):
     mp = proc_for(name)
     if not mp.running():
+        countdown = bool(mp.crash and mp.crash.get('restarting'))
+        mp.restart_token += 1            # calls off a restart that is counting down
+        if mp.crash:
+            mp.crash['restarting'] = False
         # not launched in this panel session, but an orphan may still hold the port
         sport = read_properties(name).get('server-port')
         if sport and port_listening(sport, max_age=0):
+            rc = rcon_for(name)
+            if rc:
+                try:
+                    rcon(rc[0], rc[1], 'stop')
+                except Exception:
+                    rc = None
+            if rc:
+                # Asked properly, so it saves. Back it up once it has let go of the port.
+                def after():
+                    for _ in range(60):
+                        time.sleep(1)
+                        if not port_listening(sport, max_age=0):
+                            break
+                    forget_port(sport)
+                    auto_backup(name, 'onstop')
+                threading.Thread(target=after, daemon=True).start()
+                return True, "Stopping %s (saving world + backing up)..." % name
             pid = pid_on_port(sport)
             if pid:
                 try:
                     subprocess.run(['taskkill', '/F', '/PID', str(pid)], creationflags=NO_WINDOW)
                     threading.Thread(target=lambda: (time.sleep(2), auto_backup(name, 'onstop')), daemon=True).start()
-                    return True, "Stopped the server (it was left running from before the panel restarted)."
+                    return True, ("Stopped the server, but had to force it: it was left running from "
+                                  "before the panel restarted and Hearth couldn't reach it to ask nicely. "
+                                  "Anything since its last autosave (up to 5 minutes) may be lost.")
                 except Exception as e:
                     return False, "Couldn't stop it: " + str(e)
+        if countdown:
+            return True, "Called off the restart - %s stays off." % name
         return True, "Already stopped."
+    mp.stopping = True
     try:
         mp.p.stdin.write('stop\n'); mp.p.stdin.flush()
     except Exception:
@@ -305,6 +536,108 @@ def stop_server(name):
         auto_backup(name, 'onstop')
     threading.Thread(target=waiter, daemon=True).start()
     return True, "Stopping " + name + " (saving world + backing up)..."
+
+# --------------------------------------------------------------------------- rcon
+# Minecraft's remote console. The panel normally talks to a world through the
+# pipe into its console, but that pipe belongs to the panel that launched it -
+# close Hearth and open it again and the world is still running with nobody
+# holding the other end. Without RCON the only way left to stop it was to kill
+# it outright, losing everything since its last autosave. With it, the panel
+# can still ask it to save and stop, and send it commands.
+#
+# Hearth only ever connects over 127.0.0.1, so the password never crosses the
+# network. Minecraft listens on every interface, which is why the password is
+# long and random - and why the RCON port should never be forwarded.
+RCON_LOGIN, RCON_COMMAND = 3, 2
+RCON_FIRST_PORT = 25575            # Minecraft's own default
+
+def _rcon_packet(rid, kind, body):
+    data = struct.pack('<ii', rid, kind) + body.encode('utf-8') + b'\x00\x00'
+    return struct.pack('<i', len(data)) + data
+
+def _recv_exact(sock, n):
+    buf = b''
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            raise ConnectionError("RCON closed the connection")
+        buf += chunk
+    return buf
+
+def _rcon_read(sock):
+    (n,) = struct.unpack('<i', _recv_exact(sock, 4))
+    if n < 10 or n > 1 << 20:
+        raise ValueError("not an RCON reply")
+    data = _recv_exact(sock, n)
+    rid, kind = struct.unpack('<ii', data[:8])
+    return rid, kind, data[8:-2].decode('utf-8', 'replace')
+
+def rcon(port, password, cmd, timeout=5):
+    """Run one command over RCON and return what it said. None if the command
+    went in but no answer came back - `stop` can end the world before it replies."""
+    with socket.create_connection(('127.0.0.1', int(port)), timeout=timeout) as sock:
+        sock.sendall(_rcon_packet(1, RCON_LOGIN, password))
+        rid, _, _ = _rcon_read(sock)
+        if rid == -1:
+            raise PermissionError("RCON refused the password")
+        sock.sendall(_rcon_packet(2, RCON_COMMAND, cmd))
+        try:
+            return _rcon_read(sock)[2]
+        except (OSError, ValueError):
+            return None
+
+def _rcon_why(e):
+    if isinstance(e, PermissionError):
+        return "the world's RCON password doesn't match server.properties (was it changed while running?)."
+    return "couldn't reach the world over RCON (%s)." % (str(e)[:80] or type(e).__name__)
+
+def rcon_for(name):
+    """(port, password) if this world is up and listening for RCON, else None."""
+    p = read_properties(name)
+    port, pw = p.get('rcon.port') or '', p.get('rcon.password') or ''
+    if p.get('enable-rcon') != 'true' or not port.isdigit() or not pw:
+        return None
+    return (int(port), pw) if port_listening(port, max_age=0) else None
+
+def free_rcon_port(name, also=()):
+    """A port no other world uses for anything - game, RCON or a tunnel in the bank."""
+    taken = set(also)
+    for s in CONFIG['servers']:
+        if s['name'] == name:
+            continue
+        p = read_properties(s['name'])
+        for k in ('server-port', 'rcon.port', 'query.port'):
+            if (p.get(k) or '').isdigit():
+                taken.add(int(p[k]))
+    for slot in bank_slots():
+        try:
+            taken.add(int(slot.get('port')))
+        except Exception:
+            pass
+    mine = read_properties(name).get('server-port') or ''
+    if mine.isdigit():
+        taken.add(int(mine))
+    port = RCON_FIRST_PORT
+    while port in taken or port_listening(port, max_age=0):
+        port += 1
+    return port
+
+def ensure_rcon(name):
+    """Switch RCON on before a world starts, unless it already is or the world
+    opted out ("rcon": false in config.json). Settings someone chose themselves
+    are left alone."""
+    s = get_server(name)
+    if not s or s.get('rcon') is False:
+        return
+    p = read_properties(name)
+    if p.get('enable-rcon') == 'true' and p.get('rcon.password') and (p.get('rcon.port') or '').isdigit():
+        return
+    write_properties(name, {
+        'enable-rcon': 'true',
+        'rcon.port': str(free_rcon_port(name)),
+        'rcon.password': secrets.token_urlsafe(24),
+        'broadcast-rcon-to-ops': 'false',
+    })
 
 def account_tunnel():
     for s in CONFIG['servers']:
@@ -650,6 +983,24 @@ def required_java(version):
     except Exception:
         return 0
 
+def java_need(version):
+    """Java major version a Minecraft version needs. Asks Mojang; offline,
+    falls back to their published requirements up to 1.21 (0 = no idea)."""
+    n = required_java(version) if version else 0
+    if n:
+        return n
+    m = re.match(r'^1\.(\d+)(?:\.(\d+))?$', version or '')
+    if not m:
+        return 0
+    minor, patch = int(m.group(1)), int(m.group(2) or 0)
+    if minor <= 16:
+        return 8
+    if minor == 17:
+        return 16
+    if minor < 20 or (minor == 20 and patch <= 4):
+        return 17
+    return 21
+
 _java_ver_cache = {}
 def java_major(exe=None):
     """Java major version actually installed on this PC (0 = couldn't tell)."""
@@ -660,9 +1011,12 @@ def java_major(exe=None):
     try:
         p = subprocess.run([exe, '-version'], capture_output=True, text=True,
                            timeout=20, creationflags=NO_WINDOW)
-        m = re.search(r'version "(\d+)', (p.stderr or '') + (p.stdout or ''))
-        if m:
-            n = int(m.group(1))
+        out = (p.stderr or '') + (p.stdout or '')
+        if hearth_setup:
+            n = hearth_setup.parse_java_version(out)
+        else:
+            m = re.search(r'version "(\d+)', out)
+            n = int(m.group(1)) if m else 0
     except Exception:
         pass
     _java_ver_cache[exe] = n
@@ -763,7 +1117,9 @@ def create_server(name, version, stype, seed=''):
         "motd": name, "max-players": "20", "online-mode": "true", "pvp": "true",
         "server-port": str(port), "view-distance": "10", "simulation-distance": "8",
         "spawn-protection": "0", "white-list": "false", "enforce-secure-profile": "false",
-        "level-seed": (seed or '').strip()
+        "level-seed": (seed or '').strip(),
+        "enable-rcon": "true", "rcon.port": str(free_rcon_port(name, also=(port,))), "rcon.password": secrets.token_urlsafe(24),
+        "broadcast-rcon-to-ops": "false",
     }
     lines = ["#Minecraft server properties", "#Created by Hearth Control Panel"]
     for k in sorted(base_props):
@@ -1262,12 +1618,19 @@ def flush_world(name, wait=5):
     """Ask a running world to write itself to disk, and give it a moment. A
     backup taken without this is whatever happened to have been saved already."""
     mp = SERVERS.get(name)
-    if not (mp and mp.running()):
-        return False
-    try:
-        mp.p.stdin.write('save-all flush\n'); mp.p.stdin.flush()
-    except Exception:
-        return False
+    if mp and mp.running():
+        try:
+            mp.p.stdin.write('save-all flush\n'); mp.p.stdin.flush()
+        except Exception:
+            return False
+    else:
+        rc = rcon_for(name)
+        if not rc:
+            return False
+        try:
+            rcon(rc[0], rc[1], 'save-all flush', timeout=10)
+        except Exception:
+            return False
     time.sleep(wait)
     return True
 
@@ -1445,9 +1808,11 @@ def periodic_backups():
                     continue
                 # A world the panel adopted rather than started has no pipe to
                 # flush through, but it is still somebody's world and it was
-                # getting no backups at all. Take one anyway.
+                # getting no backups at all. Save it over RCON if we can, and
+                # take one either way.
                 sport = read_properties(name).get('server-port')
                 if sport and port_listening(sport):
+                    flush_world(name)
                     auto_backup(name, 'periodic')
         except Exception:
             pass
@@ -1577,7 +1942,9 @@ def build_state():
             "protected": s['name'] in (CONFIG.get('protected') or []),
             "iconVer": int(os.path.getmtime(icon_path) * 1000) if has_icon else 0,
             "version": s.get('version') or '',
-            "hasPrev": os.path.exists(os.path.join(s['path'], 'server.jar.previous'))
+            "hasPrev": os.path.exists(os.path.join(s['path'], 'server.jar.previous')),
+            "autoRestart": s.get('autoRestart', True),
+            "crash": dict(mp.crash) if mp and mp.crash else None,
         })
     bk = bank_status()
     return {"servers": servers, "active": CONFIG.get('active'),
@@ -1789,6 +2156,8 @@ class Handler(BaseHTTPRequestHandler):
             '/api/server/update':  lambda: update_server(name, b.get('version', '')),
             '/api/server/rollback':lambda: rollback_server(name),
             '/api/server/loader':  lambda: switch_loader(name, b.get('target', '')),
+            '/api/server/autorestart': lambda: set_auto_restart(name, b.get('on', True)),
+            '/api/server/crash/clear': lambda: clear_crash(name),
         }
         if path.startswith('/api/ai/'):
             if not AI:

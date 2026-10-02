@@ -21,7 +21,7 @@ import urllib.request, urllib.error, zipfile, io
 BASE = os.path.dirname(os.path.abspath(__file__))
 NO_WINDOW = 0x08000000 if os.name == 'nt' else 0
 
-APP_VERSION = "1.4.0"      # only a fallback; the VERSION file is the truth
+APP_VERSION = "1.5.0"      # only a fallback; the VERSION file is the truth
 
 REPO = "SIllowet/hearth-panel"
 BRANCH = "main"
@@ -138,31 +138,83 @@ def _check_python():
     }
 
 
+# Where Java installers put themselves on Windows. Every vendor picks its own
+# folder, and people have whichever one a guide told them to get - looking in
+# Microsoft's alone sent everyone else to whatever `java` was on PATH, which is
+# often an ancient Java 8 that cannot run a modern world.
+JAVA_GLOBS = (
+    r"C:\Program Files\Microsoft\jdk-*",
+    r"C:\Program Files\Eclipse Adoptium\*",
+    r"C:\Program Files\Java\*",
+    r"C:\Program Files\Zulu\*",
+    r"C:\Program Files\Amazon Corretto\*",
+    r"C:\Program Files\BellSoft\*",
+)
+
+# The Minecraft launcher keeps its own Java for the game, so anyone who plays
+# already has a good one. Old launcher, then the Microsoft Store one.
+LAUNCHER_JAVA_GLOBS = (
+    r"C:\Program Files (x86)\Minecraft Launcher\runtime\*\windows-x64\*",
+) + ((os.path.join(os.environ['LOCALAPPDATA'], 'Packages',
+                   'Microsoft.4297127D64EC6_8wekyb3d8bbwe', 'LocalCache', 'Local',
+                   'runtime', '*', 'windows-x64', '*'),)
+     if os.environ.get('LOCALAPPDATA') else ())
+
+
+def java_candidates():
+    """Every java we can find on this PC, no duplicates. Says nothing about
+    which is best - ask java_version() and choose."""
+    seen, out = set(), []
+
+    def add(exe):
+        if exe and os.path.isfile(exe):
+            key = os.path.normcase(os.path.realpath(exe))
+            if key not in seen:
+                seen.add(key)
+                out.append(exe)
+
+    exe_name = 'java.exe' if os.name == 'nt' else 'java'
+    home = os.environ.get('JAVA_HOME')
+    if home:
+        add(os.path.join(home, 'bin', exe_name))
+    for pat in JAVA_GLOBS + LAUNCHER_JAVA_GLOBS:
+        for d in glob.glob(pat):
+            add(os.path.join(d, 'bin', exe_name))
+    add(shutil.which('java'))
+    return out
+
+
+def parse_java_version(text):
+    """Major version from `java -version` output. Java 8 and older call
+    themselves 1.8 - read naively, that is "Java 1" and too old for anything."""
+    m = re.search(r'version "(\d+)(?:\.(\d+))?', text or '')
+    if not m:
+        return 0
+    major = int(m.group(1))
+    if major == 1 and m.group(2):
+        major = int(m.group(2))
+    return major
+
+
+def java_version(exe):
+    return parse_java_version(_run([exe, '-version']))
+
+
 def _find_java():
-    cands = []
-    for pat in (r"C:\Program Files\Microsoft\jdk-*",
-                r"C:\Program Files\Java\*",
-                r"C:\Program Files\Eclipse Adoptium\*",
-                r"C:\Program Files\Zulu\*"):
-        cands += sorted(glob.glob(pat))
-    for c in reversed(cands):
-        exe = os.path.join(c, 'bin', 'java.exe')
-        if os.path.exists(exe):
-            return exe
-    found = shutil.which('java')
-    return found or None
+    """The newest Java here, and its version."""
+    best, best_v = None, 0
+    for exe in java_candidates():
+        v = java_version(exe)
+        if best is None or v > best_v:
+            best, best_v = exe, v
+    return best, best_v
 
 
 def _check_java():
-    exe = _find_java()
-    ver = ''
-    if exe:
-        out = _run([exe, '-version'])
-        m = re.search(r'version "?(\d+)', out)
-        if m:
-            ver = m.group(1)
+    exe, v = _find_java()
+    ver = str(v) if v else ''
     ok = bool(exe)
-    old = bool(ver) and int(ver) < 17
+    old = bool(v) and v < 17
     if ok and old:
         return {
             "id": "java", "label": "Java", "ok": False,

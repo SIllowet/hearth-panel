@@ -899,6 +899,7 @@ function viewHome(){
     <div class="uptime" id="heroUptime"></div>
     <div class="cta"><button class="primary" id="heroBtn" onclick="toggleServer()">—</button></div>
   </div>
+  <div id="crashBox"></div>
   <div class="card paper">
     <div class="eyebrow">Connect address</div>
     <div style="height:10px"></div>
@@ -922,8 +923,10 @@ function renderHomeLive(cur){
   const s=moodOf(cur);
   const map={asleep:['Asleep','','Light the hearth'],waking:['Waking…','getting things warm','Waking…'],online:['Online','',"Let it rest"]};
   const hs=el('heroStatus'),hu=el('heroUptime'),hb=el('heroBtn');
-  if(hs)hs.textContent=map[s][0];
-  if(hu)hu.textContent=s==='online'?uptimeFromLog(LOG):map[s][1];
+  const cr=(!cur.running&&cur.crash)||null;
+  if(hs)hs.textContent=cr?(cr.restarting?'Crashed — coming back…':'Crashed'):map[s][0];
+  if(hu)hu.textContent=s==='online'?uptimeFromLog(LOG):(cr?'what happened is below':map[s][1]);
+  renderCrash(cur);
   if(hb){hb.textContent=map[s][2];hb.classList.toggle('rest',s==='online');hb.classList.toggle('dots3',s==='waking');hb.disabled=(s==='waking');}
   // address
   const at=el('addrTxt'),an=el('addrNote'),tl=el('tunLine');
@@ -934,6 +937,22 @@ function renderHomeLive(cur){
     if(tl)tl.innerHTML=ton?`<span class="ember-dot"></span> Public door is open`:`<span style="width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block"></span> Door closed — only you can join. <a href="#" onclick="tun('start');return false">Open it</a>`;
   }else{if(at)at.textContent='localhost';if(an)an.innerHTML='LAN only — connect with <b>localhost</b> on this PC.';if(tl)tl.innerHTML='';}
 }
+/* A world that fell over by itself: what Hearth thinks happened, and what to do. */
+function renderCrash(cur){const b=el('crashBox');if(!b)return;const c=cur&&cur.crash;
+  if(!c){b._k=null;b.innerHTML='';return;}
+  const key=JSON.stringify([cur.name,c.at,cur.running,c.restarting,c.gaveUp]);
+  if(b._k===key)return;b._k=key;              /* left alone, so an open "last lines" stays open */
+  const when=new Date(c.at*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  const head=cur.running?`It crashed at ${when}, and Hearth started it again.`
+    :c.restarting?`It crashed at ${when}. Starting it again in a few seconds (try ${c.attempt} of ${c.limit}).`
+    :c.gaveUp?`It crashed at ${when} — again, so Hearth is leaving it off until you start it.`
+    :c.duringPlay?`It crashed at ${when}.`:`It didn't finish starting (${when}).`;
+  b.innerHTML=`<div class="card paper"><div class="eyebrow" style="color:var(--danger)">Crash</div><div style="height:10px"></div>
+    <div class="note warn"><b style="color:var(--text)">${esc(head)}</b><br>${esc(c.why)}<br><span style="color:var(--text)">${esc(c.fix)}</span></div>
+    ${(c.tail||[]).length?`<details class="disclosure" style="margin-top:12px"><summary>Last lines before it stopped</summary><div class="log" style="margin-top:8px;font-size:12px">${fmtLog(c.tail)}</div></details>`:''}
+    <div class="row" style="margin-top:12px">${c.restarting&&!cur.running?`<button class="btn sm" onclick="stopOne('${js(cur.name)}')">Don't restart it</button>`:''}
+      <button class="btn sm" onclick="clearCrash('${js(cur.name)}')">Got it</button></div></div>`;}
+async function clearCrash(n){await api('/api/server/crash/clear','POST',{name:n});const b=el('crashBox');if(b){b._k=null;b.innerHTML='';}tick();}
 function renderPeek(){const p=el('peek');if(!p)return;p.innerHTML=fmtLog(LOG.slice(-7),6);}
 function renderPresence(){
   const c=el('coins');if(!c)return;
@@ -968,7 +987,7 @@ function renderWorldsLive(){const g=el('wGrid');if(!g||!STATE)return;
           <div style="font-size:17px;font-weight:600;margin:4px 0 2px;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:8px"><span title="Change world icon" onclick="event.stopPropagation();openIcon('${js(s.name)}')" style="cursor:pointer;flex:none;display:inline-flex">${s.hasIcon?`<img src="${iconUrl(s.name,s.iconVer)}" width="22" height="22" style="border-radius:5px;display:block"/>`:`<span style="width:22px;height:22px;border-radius:5px;border:1px dashed var(--border);display:grid;place-items:center;color:var(--muted);font-size:13px;line-height:1">＋</span>`}</span>${esc(s.name)}</div></div>
         <span class="gd ${s.running?'lit':''}"></span>
       </div>
-      <div class="meta">${esc(s.type)} · port ${s.port} · <span style="color:${s.running?'var(--success)':'var(--muted)'}">${s.running?(pl.length+' online'):'asleep'}</span></div>
+      <div class="meta">${esc(s.type)} · port ${s.port} · <span style="color:${s.running?'var(--success)':s.crash?'var(--danger)':'var(--muted)'}">${s.running?(pl.length+' online'):s.crash?(s.crash.restarting?'crashed · coming back':'crashed'):'asleep'}</span></div>
       ${s.running&&pl.length?`<div style="margin-top:10px;display:flex;gap:5px;flex-wrap:wrap">${pl.map(miniCoin).join('')}</div>`:''}
       ${addr}
       <div class="row" style="margin-top:14px">
@@ -1063,6 +1082,11 @@ function renderSettings(){
     return `<div class="togcard"><div><div class="lab">${l}</div><div class="sub">${s}</div></div>
       <div class="sw ${on?'on':''}" onclick="tog('${k}',this)"><b></b></div></div>`;}).join('')}</div>
 
+  ${(()=>{const cur=STATE&&STATE.servers.find(x=>x.name===ACTIVE);const on=!cur||cur.autoRestart!==false;
+    return `<div class="togcard" style="margin-top:12px"><div><div class="lab">Restart after a crash</div>
+      <div class="sub">If it falls over while people are playing, start it again — up to 3 times in 10 minutes. Saves straight away.</div></div>
+      <div class="sw ${on?'on':''}" onclick="togAutoRestart(this)"><b></b></div></div>`;})()}
+
   <div class="card paper" style="margin-top:16px"><div class="between">
     <div><div class="lab" style="font-weight:600">Difficulty</div><div class="sub" style="color:var(--muted);font-size:12px">how dangerous the nights get</div></div>
     <div class="seg">${diff.map(d=>`<button class="${pval('difficulty')===d?'on':''}" onclick="setField('difficulty','${d}');renderSettings()">${d}</button>`).join('')}</div>
@@ -1089,6 +1113,9 @@ function renderSettings(){
     <span id="saveNote" style="color:var(--success);font-size:13px"></span></div>`;
 }
 function setField(k,v){DIRTY[k]=v;}
+async function togAutoRestart(node){const on=!node.classList.contains('on');
+  const r=await api('/api/server/autorestart','POST',{name:ACTIVE,on});
+  if(r.ok)node.classList.toggle('on',on);toast(r.msg);tick();}
 function tog(k,node){const on=!(String(pval(k))==='true');DIRTY[k]=on?'true':'false';if(k==='white-list')DIRTY['enforce-whitelist']=on?'true':'false';node.classList.toggle('on',on);}
 function bump(k,d){const v=Math.max(1,(parseInt(pval(k)||'20',10)+d));DIRTY[k]=String(v);const e=el('mpV');if(e)e.textContent=v;}
 function MOTDCOL(){return {'0':'#000','1':'#00A','2':'#0A0','3':'#0AA','4':'#A00','5':'#A0A','6':'#FA0','7':'#AAA','8':'#555','9':'#55F','a':'#5F5','b':'#5FF','c':'#F55','d':'#F5F','e':'#FF5','f':'#FFF'};}

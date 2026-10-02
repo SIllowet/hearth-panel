@@ -20,7 +20,9 @@ taskbar, so it minimises and closes like any other program.
 
 ## What it does
 
-- **Start / stop worlds** — one click. Stopping sends a proper `stop` so the world saves cleanly.
+- **Start / stop worlds** — one click. Stopping sends a proper `stop` so the world saves cleanly — even a world left running from before the panel was restarted.
+- **Notices crashes** — if a world falls over by itself, Hearth says so, tells you why in plain words, and starts it again if people were playing (a few times, then it stops trying). [Details below.](#when-a-world-crashes)
+- **Picks the right Java** — every Minecraft version wants a particular Java. Hearth finds every Java on the PC, including the one the Minecraft launcher brought, and starts each world on the one it needs.
 - **Run several worlds side by side** — one per friend group, each on its own port.
 - **Live console** — see chat, joins, deaths and errors as they happen, and type commands back.
 - **Who's online** — a live list of players currently in the world.
@@ -330,6 +332,8 @@ Created automatically on first run, next to `app.py`. Stop the panel before edit
 | `serversRoot` | Where newly created worlds get put. |
 | `servers[].type` | `vanilla`, `paper` or `fabric`. Decides whether plugins/mods are offered. |
 | `servers[].group` | A label, e.g. "College friends". Cosmetic. |
+| `servers[].autoRestart` | `false` to leave this world off after a crash instead of starting it again. Also a switch in Settings. |
+| `servers[].rcon` | `false` to stop Hearth switching on RCON for this world. See [Security](#security-plainly). |
 | `memory` | RAM given to every world (`-Xms` / `-Xmx`). Give it about half your total RAM, and never more than you actually have. |
 | `backupsRoot` | Optional. Keep backups here instead of inside each world folder — an external drive, say. Each world gets its own folder under it. |
 | `protected` | Names that can't be deleted from the panel — a guard for your main world. |
@@ -491,6 +495,27 @@ from another. The two most recent of these are kept and older ones are cleared a
 
 ---
 
+## When a world crashes
+
+If a world stops without anyone asking it to, Home shows a **Crash** card: when it
+happened, what Hearth thinks went wrong in plain words — out of memory, the wrong
+Java, a mod that doesn't fit, a port somebody else holds — what to do about it, and
+the last lines of the console. If Minecraft wrote a crash report, the card names the
+file.
+
+**If people were playing when it fell over, Hearth starts it again** after ten
+seconds. Up to three times in ten minutes; after that it leaves the world off,
+because something is properly broken and a fourth restart won't fix it. You can
+call off a restart from the card while it counts down, and switch the whole thing
+off per world in **Settings → Restart after a crash**.
+
+A world that never finished starting is never restarted — it would only fail the
+same way again. Neither is one that something will always break, like the wrong Java
+or a mod for another version. And `/stop` — from the panel, the console, or an op
+in game — is never mistaken for a crash.
+
+---
+
 ## Security, plainly
 
 - The panel listens on `127.0.0.1` only. Nothing outside your PC can reach it.
@@ -511,6 +536,14 @@ from another. The two most recent of these are kept and older ones are cleared a
   PC could read it — Hearth hands it to the agent through a file or the environment
   instead, where the agent supports it.
 - The playit tunnel exposes your **Minecraft server**, not the panel.
+- **RCON is switched on for every world**, with a long random password Hearth writes
+  into `server.properties`. It is how the panel can still save and stop a world it
+  didn't start — one left running from before Hearth restarted — instead of killing it
+  and losing everything since the last autosave. Hearth only connects to it from this
+  PC, so the password never crosses your network, but Minecraft listens for RCON on
+  every network card. **Don't forward the RCON port** (`rcon.port`, from 25575 up), and
+  if you'd rather not have it at all, set `"rcon": false` on the world in
+  `config.json` (and `enable-rcon=false` in its settings).
 - **The AI has real console access.** It is gated two ways — the player has to be
   on your trusted list, and the command has to be on the toolbelt — and the
   destructive commands are blocked outright. But it is still a language model
@@ -530,9 +563,10 @@ from another. The two most recent of these are kept and older ones are cleared a
 
 **"server.jar missing"** — the folder in `config.json` doesn't have a `server.jar`. Check the path.
 
-**The world starts and immediately stops** — open the Console tab and read the last few
-lines. Almost always one of: wrong Java version for that Minecraft version, `eula=true`
-not set, or the port already taken.
+**The world starts and immediately stops** — Home shows a **Crash** card with what
+Hearth thinks went wrong and what to do about it; the last lines of the console are
+under it. Almost always one of: wrong Java version for that Minecraft version, a mod
+built for another version, `eula=true` not set, or the port already taken.
 
 **"BLOCKED: port … is already in use"** — that's the safety guard. Something is already
 listening on that port, usually a server that's still running from before. Hit **Stop**
@@ -544,9 +578,10 @@ install folders and the `py` launcher as well as PATH, so try that before
 reinstalling anything.
 
 **Java not found** — Setup tells you if Java is missing or too old, and links to
-the right download. The panel looks in the Microsoft, Adoptium, Zulu and Oracle
-install folders and then on your PATH. If you put Java somewhere unusual, make
-sure `java -version` works in a terminal.
+the right download. The panel looks in `JAVA_HOME`, the Microsoft, Adoptium, Oracle,
+Zulu, Corretto and Liberica install folders, the Minecraft launcher's own Java, and
+then on your PATH. If you put Java somewhere unusual, set `JAVA_HOME` to it. The first
+line of a world's console says which Java it was started with.
 
 **Hearth opened in my browser instead of its own window** — it uses Edge or
 Chrome's app mode for that, so if neither is installed it falls back to your
@@ -555,8 +590,9 @@ normal browser. Everything still works; it is just a tab.
 **Icons don't work** — install Pillow: `pip install Pillow`.
 
 **The panel shows a world as running with an empty console** — that world was started by
-a previous run of the panel, so this one has no pipe to its output. Stop and start it
-from the panel to get the console back.
+a previous run of the panel, so this one has no pipe to its output. Commands you type
+still reach it (over RCON) and their answers show up, and **Stop** still saves it
+properly. Stop and start it from the panel to get the live console back.
 
 **I edited `app.py` and nothing changed** — restart the panel. If you edited a file
 that ships with Hearth, also run `python tools/make_sums.py`, or the updater will
