@@ -191,7 +191,10 @@
   .addrpill.copied{border-color:var(--ember)}
   .addrpill .ico{display:flex;color:var(--muted)}
   .addrnote{margin-top:9px;font-size:12px;color:var(--muted);min-height:16px}
-  .tunline{display:flex;align-items:center;gap:7px;margin-top:11px;font-size:12px;color:var(--muted)}
+  .tunline{display:flex;align-items:center;gap:7px;margin-top:11px;font-size:12px;color:var(--muted);flex-wrap:wrap}
+  .joinrow{margin-top:14px}
+  .joinrow .jlab{display:flex;gap:8px;align-items:baseline;font-size:12px;color:var(--muted);margin-bottom:6px}
+  .joinrow .jlab b{color:var(--text);font-weight:600}
 
   /* presence coins */
   .coins{display:flex;flex-wrap:wrap;gap:14px;margin-top:4px}
@@ -506,8 +509,11 @@ async function loadSetup(){
   try{ DOC=await api('/api/doctor'); }catch(e){ DOC=null; }
   renderSetup();
   try{ SHORTCUT=await api('/api/shortcut'); }catch(e){ SHORTCUT=null; }
+  if(!NET||!NET.ran) await quickNetwork();
   await loadPlayit();
   renderSetup();
+  if(PLAYIT&&PLAYIT.linked) syncPlayit(true);
+  else if(((PLAYIT||{}).claim||{}).state==='waiting') watchClaim();
   try{ UPD=await api('/api/update/check'); }catch(e){ UPD=null; }
   renderSetup();
 }
@@ -592,8 +598,8 @@ const AUDIENCES=[
 const WAYS={
   local:{t:'No setup needed', tag:'nothing to install',
     body:`<p>Everyone is already on your network, so there is nothing to set up.
-      Give them this PC's local address with <code>:25565</code> after it and they
-      can join straight away.</p>`},
+      Give them the address below and they can join straight away. If it doesn't
+      work, allow Java through Windows Firewall on this PC.</p>`},
   playit:{t:'playit tunnel', tag:'works on any connection',
     body:`<p>playit gives your world an address like <code>example.playit.gg</code>
       that anyone can join from anywhere. Nothing to change on your router, and
@@ -604,8 +610,8 @@ const WAYS={
       you were in the same house. Nothing is opened to the internet at all.</p>
       <ol><li>Install Tailscale and sign in — on your PC and each friend's PC.</li>
       <li>Invite them from the Tailscale admin page.</li>
-      <li>Give them the address Tailscale shows for this PC, with
-      <code>:25565</code> after it.</li></ol>
+      <li>Give them this PC's Tailscale address &mdash; Hearth shows it here, and on
+      Home, once Tailscale is running.</li></ol>
       <p class="muted">Everyone needs the app installed, so it suits a regular
       group rather than strangers.</p>`,
     link:['Get Tailscale','https://tailscale.com/download']},
@@ -624,7 +630,14 @@ function audienceRow(){
       <b>${esc(l)}</b><span>${esc(d)}</span></button>`).join('')}</div>`;
 }
 
-function pickAudience(k){ AUDIENCE=k; if(NET) probeNetwork(); else renderSetup(); }
+function pickAudience(k){ AUDIENCE=k; if(NET&&NET.ran) probeNetwork(); else quickNetwork().then(renderSetup); }
+
+/* Who is joining decides the answer far more often than the connection does,
+   so recommend straight away and only look at the connection when asked. */
+async function quickNetwork(){
+  try{ NET=await api('/api/network?quick=1&audience='+encodeURIComponent(AUDIENCE)); }
+  catch(e){ NET=null; }
+}
 
 async function probeNetwork(){
   NETBUSY=true; renderSetup();
@@ -646,9 +659,18 @@ function wayBlock(key, recommended, reason){
     </div>
     ${reason?`<p class="wayreason">${esc(reason)}</p>`:''}
     <div class="waybody">${w.body}</div>
+    ${key==='local'&&NET&&NET.local_ip?wayAddr("Give them this",NET.local_ip):''}
+    ${key==='tailscale'&&NET&&NET.tailscale_ip?wayAddr("Your Tailscale address — give them this",NET.tailscale_ip):''}
     ${key==='playit'?playitSteps():''}
     ${(link&&key!=='playit')?`<div class="row" style="margin-top:9px">${link}</div>`:''}
   </div>`;
+}
+
+function wayAddr(label,ip){
+  const cur=STATE&&STATE.servers.find(s=>s.name===ACTIVE);
+  const a=ip+((cur&&cur.port&&cur.port!=='25565'&&cur.port!=='?')?':'+cur.port:'');
+  return `<div class="jlab" style="margin-top:10px;font-size:12px;color:var(--muted)">${esc(label)}</div>
+    <div class="addrpill" style="margin-top:6px" onclick="copyJoin(this,'${js(a)}')"><span class="mono">${esc(a)}</span><span class="ico">${copyIco}</span></div>`;
 }
 
 let PLAYIT=null;
@@ -674,76 +696,115 @@ async function savePlayitSecret(){
   await loadPlayit(); renderSetup();
 }
 
-/* playit needs two things: the program, and a secret that ties it to your
-   playit account. Hearth can fetch the program itself. The secret has to come
-   from you, but it should not mean editing a config file by hand. */
+/* playit needs the program and a secret that ties it to a playit account.
+   Hearth fetches the program, and gets the secret the way playit's own agent
+   does: it opens a playit.gg page, you approve it, and the key arrives by
+   itself. Then it reads which address each world got - nothing to copy. */
 function playitSteps(){
-  const have = PLAYIT && PLAYIT.exists;
-  const linked = PLAYIT && PLAYIT.linked;
-  if(have && linked){
-    return `<p class="stepdone">playit is set up. Light the hearth in Worlds and
-      the tunnel starts with it &mdash; then send people the address it shows.</p>`;
+  const P=PLAYIT||{}, c=P.claim||{};
+  if(P.linked) return playitLinked(P.info||{});
+  if(c.state==='waiting'){
+    return `<div class="note" style="margin-top:12px"><b style="color:var(--text)">Waiting for you on playit.gg&hellip;</b><br>
+      ${c.phase==='WaitingForUser'
+        ?'The page is open. Press <b>Approve</b> there and come back.'
+        :'A playit.gg page should have opened in your browser. Sign in &mdash; or make a free account &mdash; then press <b>Approve</b>.'}
+      <div class="row" style="margin-top:10px;gap:7px"><a class="btn sm" href="${safeUrl(c.url)}" target="_blank" rel="noopener">Open the page again</a>
+        <button class="btn sm ghost" onclick="cancelClaim()">Cancel</button></div></div>`;
   }
-  const step1 = have
-    ? `<li class="done"><b>The playit program</b> &mdash; here already.</li>`
-    : `<li><b>Get the playit program.</b> Hearth downloads it straight from
-        playit's own signed release and checks the signature before keeping it.
-        <div class="row" style="margin-top:8px">
-          <button class="btn sm" id="pgBtn" onclick="getPlayit()">Get it for me</button>
-          <span class="fixnote">about 4 MB, saved next to Hearth</span>
-        </div></li>`;
-  const step2 = linked
-    ? `<li class="done"><b>Linked to your playit account.</b></li>`
-    : `<li><b>Link it to a playit account.</b> Make one at playit.gg, add an
-        agent, and copy its secret key.
-        <div class="row" style="margin-top:8px;gap:7px;flex-wrap:wrap">
-          <a class="btn sm ghost" href="https://playit.gg/account/agents"
-             target="_blank" rel="noopener">Open playit.gg</a>
-        </div>
-        <div class="row" style="margin-top:8px;gap:7px">
-          <input id="pgSecret" class="inp" placeholder="paste the secret key here"
-                 spellcheck="false" autocomplete="off" style="flex:1;min-width:180px">
-          <button class="btn sm" id="pgSave" onclick="savePlayitSecret()">Save</button>
-        </div>
-        <span class="fixnote">Hearth writes it into your settings for you &mdash;
-        no config file to edit.</span></li>`;
-  const step3 = `<li${(have&&linked)?' class="done"':''}><b>Light the hearth.</b>
-        Hearth starts the tunnel with your world and shows you the address to
-        pass on.</li>`;
-  return `<ol class="steps">${step1}${step2}${step3}</ol>`;
+  return `${c.state==='failed'?`<div class="note warn" style="margin-top:12px">${esc(c.msg)}</div>`:''}
+    <div class="row" style="margin-top:12px;align-items:center">
+      <button class="primary" id="pgGo" style="font-size:13px;padding:10px 20px" onclick="setupPlayit()">Set up playit</button>
+      <span class="fixnote">${P.exists?'':'Downloads playit (about 4 MB, checked that it is really theirs), then '}opens playit.gg for you to approve. Free.</span>
+    </div>
+    <details class="disclosure" style="margin-top:12px"><summary>Already have a playit secret key?</summary>
+      <div class="row" style="margin-top:8px;gap:7px">
+        <input id="pgSecret" class="inp" placeholder="paste the secret key here"
+               spellcheck="false" autocomplete="off" style="flex:1;min-width:180px">
+        <button class="btn sm" id="pgSave" onclick="savePlayitSecret()">Save</button>
+      </div></details>`;
+}
+
+function playitLinked(info){
+  const worlds=(STATE&&STATE.servers)||[];
+  const missing=worlds.filter(s=>!(s.hasTunnel&&s.address));
+  const rows=worlds.map(s=>(s.hasTunnel&&s.address)
+    ?`<li class="done"><b>${esc(s.name)}</b> &mdash; <span class="mono">${esc(s.address)}</span></li>`
+    :`<li><b>${esc(s.name)} needs an address.</b> On playit.gg press <b>Add tunnel</b>, choose
+       <b>Minecraft Java</b>, and set the local port to <b>${esc(s.port)}</b>. Hearth spots it by itself.</li>`).join('');
+  return `<p class="stepdone">Linked to your playit account. The public door opens by itself when you light a world.</p>
+    ${info.error?`<div class="note warn" style="margin-top:9px">${esc(info.error)}</div>`:''}
+    ${(info.pending||[]).length?`<p class="muted" style="margin-top:8px">Still being set up on playit: ${esc(info.pending.join(', '))}</p>`:''}
+    ${worlds.length?`<ol class="steps">${rows}</ol>`:'<p class="muted">Make a world and Hearth will find its address.</p>'}
+    <div class="row" style="margin-top:10px;gap:7px">
+      ${missing.length?`<a class="btn sm" href="https://playit.gg/account/tunnels" target="_blank" rel="noopener">Open my playit tunnels</a>`:''}
+      <button class="btn sm ghost" id="pgSync" onclick="syncPlayit()">Look again</button></div>`;
+}
+
+async function setupPlayit(){
+  const b=el('pgGo'); if(b) b.disabled=true;
+  if(!(PLAYIT&&PLAYIT.exists)){
+    if(b) b.textContent='Downloading playit…';
+    let r; try{ r=await api('/api/playit/get','POST',{}); }catch(e){ r={ok:false,msg:'The download did not finish.'}; }
+    if(!r.ok){ toast(r.msg||''); await loadPlayit(); renderSetup(); return; }
+  }
+  if(b) b.textContent='Opening playit.gg…';
+  try{ await api('/api/playit/claim','POST',{}); }catch(e){ toast('Could not reach playit.'); }
+  await loadPlayit(); renderSetup(); watchClaim();
+}
+
+async function cancelClaim(){ await api('/api/playit/claim/cancel','POST',{}); await loadPlayit(); renderSetup(); }
+
+/* While a claim waits, and while a world still has no address, keep looking -
+   approving on playit.gg or adding a tunnel there should just show up here. */
+let PGT=null;
+function watchClaim(){
+  clearTimeout(PGT);
+  PGT=setTimeout(async()=>{
+    if(CUR!=='setup') return;
+    await loadPlayit();
+    const c=(PLAYIT||{}).claim||{};
+    if(c.state==='done'&&PLAYIT.linked){ toast('playit is linked ✓'); await tick(); }
+    renderSetup();
+    if(c.state==='waiting') watchClaim(); else if(PLAYIT&&PLAYIT.linked) syncPlayit(true);
+  },2000);
+}
+
+async function syncPlayit(quiet){
+  const b=el('pgSync'); if(b&&!quiet){b.disabled=true;b.textContent='Looking…';}
+  let r; try{ r=await api('/api/playit/sync','POST',{}); }catch(e){ r={ok:false,msg:''}; }
+  if(!quiet&&r.msg) toast(r.msg);
+  await loadPlayit(); await tick(); if(CUR==='setup') renderSetup();
+  const missing=((STATE&&STATE.servers)||[]).some(s=>!(s.hasTunnel&&s.address));
+  clearTimeout(PGT);
+  if(CUR==='setup'&&PLAYIT&&PLAYIT.linked&&missing&&!(PLAYIT.info||{}).error) PGT=setTimeout(()=>syncPlayit(true),8000);
 }
 
 function shareCard(){
   let inner='';
-  if(NETBUSY){
-    inner=`<p class="muted">Looking at your connection&hellip; this takes a few seconds.</p>`;
-  } else if(!NET){
-    inner=`<p class="muted">Hearth can look at your connection and tell you which
-      option will actually work. Some providers make forwarding a port impossible,
-      and there is no way to know without checking.</p>
-      <div class="row" style="margin-top:11px">
-        <button class="btn" onclick="probeNetwork()">Check my connection</button>
-      </div>
-      <p class="privnote">This runs a trace to your first few routers, and asks a
-      public service what your address looks like from outside — the only way to
-      find that out. Nothing is stored or sent anywhere else.</p>`;
+  if(!NET){
+    inner=NETBUSY?`<p class="muted">Looking at your connection&hellip; this takes a few seconds.</p>`
+      :`<p class="muted">Pick who is joining above.</p>`;
   } else {
     const rec=NET.recommend||{};
     const facts=(NET.facts||[]).map(f=>
       `<div class="fact"><b>${esc(f.t)}</b><span>${esc(f.d)}</span></div>`).join('');
     const others=Object.keys(WAYS).filter(k=>k!==rec.pick &&
       !(AUDIENCE==='house' && k!=='local') && !(AUDIENCE!=='house' && k==='local'));
-    inner=`${facts?`<div class="facts">${facts}</div>`:''}
-      ${NET.local_ip?`<p class="muted">This PC on your network: <code>${esc(NET.local_ip)}:25565</code></p>`:''}
-      ${wayBlock(rec.pick, true, rec.because)}
-      <div class="row" style="margin-top:12px">
-        <button class="btn ghost sm" onclick="SHOWALL=!SHOWALL;renderSetup()">
-          ${SHOWALL?'Hide the other ways':'Show the other ways'}</button>
-        <button class="btn ghost sm" onclick="probeNetwork()">Check again</button>
+    inner=`${wayBlock(rec.pick, true, rec.because)}
+      ${facts?`<div class="facts" style="margin-top:14px">${facts}</div>`:''}
+      <div class="row" style="margin-top:12px;gap:7px;flex-wrap:wrap">
+        ${others.length?`<button class="btn ghost sm" onclick="SHOWALL=!SHOWALL;renderSetup()">
+          ${SHOWALL?'Hide the other ways':'Show the other ways'}</button>`:''}
+        ${AUDIENCE==='house'?'':`<button class="btn ghost sm" onclick="probeNetwork()" ${NETBUSY?'disabled':''}>
+          ${NETBUSY?'Looking…':(NET.ran?'Check my connection again':'Check my connection')}</button>`}
       </div>
+      ${(!NET.ran&&AUDIENCE!=='house')?`<p class="privnote">Only needed if you'd rather forward a port yourself &mdash;
+        some providers make that impossible, and checking is the only way to know. It traces your
+        first few routers and asks a public service what your address looks like from outside.
+        Nothing is stored or sent anywhere else.</p>`:''}
       ${SHOWALL?others.map(k=>wayBlock(k,false,'')).join(''):''}`;
   }
-  return `<div class="card"><h3>Letting people in</h3>
+  return `<div class="card" id="shareCard"><h3>Letting people in</h3>
     <p class="muted">Who is going to join?</p>
     ${audienceRow()}
     ${inner}</div>`;
@@ -773,7 +834,7 @@ async function addShortcut(){
 function renderSetup(){
   const body=el('setupBody'); if(!body) return;
   if(!DOC){ body.innerHTML=`<div class="card"><p class="muted">Could not run the
-    setup checks. The panel still works.</p></div>`+shortcutCard()+updateCard()+shareCard(); return; }
+    setup checks. The panel still works.</p></div>`+shareCard()+shortcutCard()+updateCard(); jumpToShare(); return; }
   const head = DOC.ready
     ? `<div class="okbanner">Everything Hearth needs is here.${DOC.suggestions?
         ` There ${DOC.suggestions===1?'is':'are'} ${DOC.suggestions} optional thing${DOC.suggestions===1?'':'s'} below.`:''}</div>`
@@ -781,8 +842,13 @@ function renderSetup(){
         sorting before Hearth can run a world. Each one below says what to do.</div>`;
   body.innerHTML = head
     + `<div class="card"><h3>What Hearth needs</h3>${DOC.checks.map(checkRow).join('')}</div>`
-    + shortcutCard() + updateCard() + shareCard();
+    + shareCard() + shortcutCard() + updateCard();
+  jumpToShare();
 }
+/* Home's "set it up" button lands on the part of Setup it is about. */
+let JUMP=false;
+function goShare(){ JUMP=true; go('setup'); }
+function jumpToShare(){ if(!JUMP) return; const c=el('shareCard'); if(c){ JUMP=false; c.scrollIntoView({block:'start'}); } }
 
 /* ---------------- presence + log parsing ---------------- */
 function presenceFrom(lines){
@@ -901,11 +967,8 @@ function viewHome(){
   </div>
   <div id="crashBox"></div>
   <div class="card paper">
-    <div class="eyebrow">Connect address</div>
-    <div style="height:10px"></div>
-    <div class="addrpill" id="addrPill" onclick="copyAddr()"><span id="addrTxt" class="mono">—</span><span class="ico" id="addrIco">${copyIco}</span></div>
-    <div class="addrnote" id="addrNote"></div>
-    <div class="tunline" id="tunLine"></div>
+    <div class="eyebrow">How friends join</div>
+    <div id="joinRows"></div>
   </div>
   <div class="card paper">
     <div class="between"><div class="eyebrow">Who's by the fire</div><span class="num" id="fireCount" style="color:var(--muted);font-size:12px"></span></div>
@@ -928,15 +991,46 @@ function renderHomeLive(cur){
   if(hu)hu.textContent=s==='online'?uptimeFromLog(LOG):(cr?'what happened is below':map[s][1]);
   renderCrash(cur);
   if(hb){hb.textContent=map[s][2];hb.classList.toggle('rest',s==='online');hb.classList.toggle('dots3',s==='waking');hb.disabled=(s==='waking');}
-  // address
-  const at=el('addrTxt'),an=el('addrNote'),tl=el('tunLine');
-  if(cur.hasTunnel&&cur.address){
-    if(at)at.textContent=cur.address;
-    if(an&&!an._lock)an.innerHTML=`Tap to copy — hand this to your friends.`;
-    const ton=STATE.tunnel.running;
-    if(tl)tl.innerHTML=ton?`<span class="ember-dot"></span> Public door is open`:`<span style="width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block"></span> Door closed — only you can join. <a href="#" onclick="tun('start');return false">Open it</a>`;
-  }else{if(at)at.textContent='localhost';if(an)an.innerHTML='LAN only — connect with <b>localhost</b> on this PC.';if(tl)tl.innerHTML='';}
+  renderJoin(cur);
 }
+
+/* Every way in that works right now, best first. A friend on the same wifi
+   needs this PC's local address, not "localhost" - that only ever meant this PC. */
+function joinWays(cur){
+  const R=(STATE&&STATE.reach)||{};
+  const sfx=(cur.port&&cur.port!=='25565'&&cur.port!=='?')?':'+cur.port:'';
+  const ways=[];
+  if(cur.hasTunnel&&cur.address)ways.push({who:'Anyone, anywhere',how:'through playit',addr:cur.address,pub:true});
+  if(R.tailscale)ways.push({who:'Friends on Tailscale',how:'your private network',addr:R.tailscale+sfx});
+  if(R.lan)ways.push({who:'On your wifi',how:'same house',addr:R.lan+sfx,
+    hint:'If they can\'t connect, allow Java through Windows Firewall on this PC.'});
+  ways.push({who:'On this PC',how:'',addr:'localhost'+sfx});
+  return ways;
+}
+function renderJoin(cur){
+  const box=el('joinRows');if(!box||!cur)return;
+  const ways=joinWays(cur),pub=ways.find(w=>w.pub);
+  const linked=STATE.tunnel.available,open=STATE.tunnel.running;
+  const key=JSON.stringify([cur.name,ways,linked,open]);
+  if(box._k===key)return;box._k=key;
+  const row=(w,i)=>`<div class="joinrow"><div class="jlab"><b>${esc(w.who)}</b>${w.how?`<span>${esc(w.how)}</span>`:''}</div>
+    <div class="addrpill" onclick="copyJoin(this,'${js(w.addr)}')"><span class="mono">${esc(w.addr)}</span><span class="ico">${copyIco}</span></div>
+    ${w.hint?`<div class="addrnote">${esc(w.hint)}</div>`:''}</div>`;
+  let head='';
+  if(pub){
+    head=open?`<div class="tunline"><span class="ember-dot"></span> Public door is open</div>`
+      :`<div class="tunline"><span style="width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block"></span> Door closed — outside friends can't get in. <a href="#" onclick="tun('start');return false">Open it</a></div>`;
+  }else{
+    head=`<div class="note" style="margin-top:12px">${linked
+      ?'playit is linked, but this world has no public address yet.'
+      :'Friends outside your home can\'t join yet.'}
+      <div class="row" style="margin-top:9px"><button class="btn sm" onclick="goShare()">${linked?'Finish it in Setup':'Set it up — about a minute'}</button></div></div>`;
+  }
+  box.innerHTML=(pub?row(pub):'')+head+ways.filter(w=>!w.pub).map(row).join('');
+}
+function copyJoin(node,a){navigator.clipboard.writeText(a);const ic=node.querySelector('.ico');
+  node.classList.add('copied');ic.innerHTML=checkIco;ic.style.color='var(--success)';toast('Copied '+a);
+  setTimeout(()=>{node.classList.remove('copied');ic.innerHTML=copyIco;ic.style.color='';},1600);}
 /* A world that fell over by itself: what Hearth thinks happened, and what to do. */
 function renderCrash(cur){const b=el('crashBox');if(!b)return;const c=cur&&cur.crash;
   if(!c){b._k=null;b.innerHTML='';return;}
@@ -1006,7 +1100,7 @@ function editMeta(name){const s=STATE.servers.find(x=>x.name===name)||{};
     <div style="display:grid;gap:14px">
       <label>Friend group<input id="mGroup" placeholder="e.g. College squad" value="${attr(s.group||'')}" style="width:100%;margin-top:5px"/></label>
       <label>Public address<input id="mAddr" placeholder="from playit.gg — e.g. coolname.gl.joinmc.link" value="${attr(s.address||'')}" style="width:100%;margin-top:5px"/>
-        <div class="hint-row">Add a tunnel for <b>port ${s.port}</b> on playit.gg, then paste its address here — the running agent serves it automatically.</div></label>
+        <div class="hint-row">Once playit is linked in Setup, Hearth fills this in by itself from the tunnel for <b>port ${s.port}</b>. Type one here only for an address of your own, like a custom domain — Hearth will leave it alone.</div></label>
       <div><div style="font-size:14px;font-weight:600">World icon <span class="muted" style="font-weight:400">— shows next to this world in the server list</span></div>
         <div class="row" style="margin-top:8px;align-items:center">
           ${s.hasIcon?`<img src="${iconUrl(name,s.iconVer)}" width="48" height="48" style="border-radius:8px;border:1px solid var(--border)"/>`:`<div style="width:48px;height:48px;border-radius:8px;border:1px dashed var(--border);display:grid;place-items:center;color:var(--muted);font-size:10px">none</div>`}
@@ -1653,10 +1747,8 @@ async function toggleServer(){const cur=STATE.servers.find(s=>s.name===ACTIVE);c
 async function tun(a){const r=await api('/api/tunnel/'+a,'POST',{name:ACTIVE});toast(r.msg);tick();}
 async function setActive(n){ACTIVE=n;await api('/api/server/setactive','POST',{name:n});tick();render();}
 async function convertPaper(n){openHold('Switch to Paper?',`This swaps <b>${esc(n)}</b> to Paper so it can run plugins — your world, settings and players are untouched, and the old jar is kept.`,'Hold to switch',async()=>{toast('Switching…');const r=await api('/api/server/loader','POST',{name:n,target:'paper'});toast(r.msg);tick();if(CUR==='mods')loadModPage();if(CUR==='version')loadVersion();});}
-function copyAddr(){const cur=STATE.servers.find(s=>s.name===ACTIVE);const a=(cur&&cur.address)||'localhost';navigator.clipboard.writeText(a);
-  const p=el('addrPill'),ic=el('addrIco'),n=el('addrNote');p.classList.add('copied');ic.innerHTML=checkIco;ic.style.color='var(--success)';
-  n._lock=true;n.innerHTML='<span style="color:var(--success)">Copied for your friends ✓</span>';
-  setTimeout(()=>{p.classList.remove('copied');ic.innerHTML=copyIco;ic.style.color='';n._lock=false;n.innerHTML='Tap to copy — hand this to your friends.';},1600);}
+function copyAddr(){const cur=STATE.servers.find(s=>s.name===ACTIVE);if(!cur)return;const a=joinWays(cur)[0].addr;
+  navigator.clipboard.writeText(a);toast('Copied '+a);}
 
 /* create modal */
 function openCreate(){api('/api/versions').then(v=>{

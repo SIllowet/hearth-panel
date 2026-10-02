@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.6.0
+
+- **Setting up playit is one button.** It used to be seven steps on two
+  websites: make an account, add an agent, copy its secret, paste it in, add a
+  tunnel, copy its address, paste that into the world. Now **Set up playit**
+  downloads the agent, opens playit.gg, and once you press Approve there the
+  key arrives by itself - the same way playit's own program links an account.
+- **Hearth finds each world's address.** It asks playit which tunnels it
+  serves and gives every world the one pointed at its port. If a world has
+  none yet, Setup says exactly what to add on playit.gg and picks it up the
+  moment you do. An address you typed in yourself is never overwritten.
+- **The public door opens with the world.** The README always said the tunnel
+  starts with your world; it didn't - it needed its own click on Home, easy to
+  miss while friends were waiting. Now lighting a world opens it too.
+- **Home shows every way in.** "Connect with localhost" only ever worked on
+  your own PC. Home now lists the address for friends anywhere, on your
+  Tailscale network and on your wifi, each one tap to copy - with the port
+  added when it isn't the usual one.
+- **Setup recommends straight away.** Who is joining decides the answer far
+  more often than your connection does, so the recommendation appears as soon
+  as you pick, and the connection check is there for when you want to forward
+  a port. "Letting people in" now sits right under the checks instead of at
+  the bottom, and Home's button takes you straight to it.
+- playit can be linked before you have made a world.
+
 ## 1.5.0
 
 - **Hearth notices when a world crashes.** A world that fell over used to
