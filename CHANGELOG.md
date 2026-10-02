@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.5.0
+
+- **Hearth notices when a world crashes.** A world that fell over used to
+  just look asleep. Now Home says it crashed, why - out of memory, the wrong
+  Java, a mod built for another version, a port someone else holds - what to
+  do about it, and shows the last lines before it stopped.
+- **And brings it back.** If people were playing, it starts the world again
+  after ten seconds - up to three times in ten minutes, then it leaves it off
+  rather than loop on something broken. A world that never finished starting
+  is never restarted, and `/stop` is never mistaken for a crash. Switch it off
+  per world in Settings.
+- **Stopping a world left running from before no longer kills it.** If the
+  panel was closed and reopened while a world ran, Stop used to end it with
+  `taskkill /F`, losing everything since its last autosave - up to five
+  minutes of building. Worlds now have RCON switched on, with a long random
+  password, so Hearth can still ask them to save and stop. Console commands
+  reach those worlds too, and their 2-hourly backups save the world first.
+- **The right Java for each world.** Hearth only looked for Microsoft's Java,
+  and took the newest it found whatever the world needed. It now finds Java
+  from Adoptium, Oracle, Zulu, Corretto and Liberica, `JAVA_HOME`, and the
+  one the Minecraft launcher installs, and starts each world on the Java its
+  version asks for. A world that needs a newer Java than the PC has is
+  stopped before launch with what to install, instead of crashing.
+- Java 8 is no longer read as "Java 1".
+
 ## 1.4.0
 
 - **Other web pages can no longer drive the panel.** Listening on `127.0.0.1`
