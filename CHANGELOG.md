@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.7.0
+
+The AI got more to work with, and gets answers right more often. None of it
+could be tried against a live model while writing it - the new behaviour is
+covered by tests that script the model's replies - so treat this as a release
+to watch on your own server.
+
+- **It can look things up before it answers.** New tools: who's online, the
+  world's public settings, exact arithmetic (stacks, distances), saved places,
+  the server log, read-only questions to the server itself (`data get`,
+  `time query`, `gamerule`, `worldborder get`...), and the backup list. Ask
+  "what went wrong at 10pm?" and it reads the log instead of guessing.
+- **And do a few things in the panel.** Remind someone in N minutes, save or
+  forget a named place, remember a fact about the server, take a backup.
+  Places and facts show on the AI tab, each with a forget button.
+- **Tools are gated by you, not by the model.** Each is "anyone" or "trusted
+  only", enforced against the real trusted list; log lines are scrubbed of IP
+  addresses; the server query only passes a short list of read-only commands
+  and refuses anything that changes the world. Every tool has a switch.
+- **Chat commands that don't need the model.** `ember help`, `tools`, `status`,
+  `whoami`, `notes`, `forget me`, `places`, `bye`. Answered by the panel
+  instantly, so they cost nothing and still work when the brain is down. Inside
+  an open conversation they need a `!` (`!help`) so ordinary talk like "help me
+  find diamonds" is never mistaken for one.
+- **It gets one go at fixing a bad command.** An invented command, a missing
+  argument, or `@s` / `~ ~ ~` (the console has no body to be relative to) is
+  handed back with the reason before anything reaches the console or the chat.
+  Refusals about trust or the blocked list are never retried.
+- **Fewer silent failures.** A busy provider (429/5xx) or a dropped connection
+  gets one more try. If the brain still doesn't answer, it says so in chat once
+  every two minutes instead of ignoring people. Replies wrapped in `<think>`
+  blocks, code fences, or chatty prose around the JSON are understood, and a
+  reply cut off mid-way still delivers its line.
+- **Paper and Spigot commands** `tps`, `mspt`, `version` and `plugins` join the
+  toolbelt - so "is it lagging?" has an answer.
+- The updater now ships `ai_tools.py`.
+
 ## 1.6.0
 
 - **Setting up playit is one button.** It used to be seven steps on two

@@ -456,6 +456,11 @@ def attach_ai(name, mp):
             lambda cmd: send_command(name, cmd),
             lambda line: mp.log.append(line),
             lambda: online_players(name),
+            helpers={
+                "query": lambda cmd: query_command(name, cmd),
+                "backup": lambda: manual_backup(name),
+                "backups": lambda: list_backups(name),
+            },
         )
         return lambda line: AI.on_console_line(name, line)
     except Exception as e:
@@ -486,6 +491,18 @@ def send_command(name, cmd):
         return True, "Sent: " + cmd
     except Exception as e:
         return False, "Could not send command: " + str(e)
+
+def query_command(name, cmd):
+    """Run one command and hand back what the server answered. The stdin pipe
+    can't do that - the answer lands in the console log with everything else -
+    so this is RCON only. The AI uses it for read-only questions, never to change anything."""
+    rc = rcon_for(name)
+    if not rc:
+        return False, "this world has no RCON, so I can't read answers back"
+    try:
+        return True, rcon(rc[0], rc[1], cmd.strip().lstrip('/')) or ''
+    except Exception as e:
+        return False, _rcon_why(e)
 
 def stop_server(name):
     mp = proc_for(name)
@@ -2366,7 +2383,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/ai/config':
                 ok, msg = AI.update_config(b.get('patch') or {})
             elif path == '/api/ai/memory':
-                ok, msg = AI.update_memory(b.get('about'), b.get('facts'), b.get('forget'))
+                ok, msg = AI.update_memory(b.get('about'), b.get('facts'), b.get('forget'),
+                                           b.get('forgetFact'), b.get('forgetPlace'))
             elif path == '/api/ai/test':
                 ok, msg = AI.test_connection()
             elif path == '/api/ai/say':
