@@ -1534,6 +1534,14 @@ function renderAI(){
       ${sw(AIS.trustOps,"aiSet('trust_ops',!AIS.trustOps)")}</div>
     <div class="togcard"><div><div class="lab">Greets people</div><div class="sub">says hi when someone joins</div></div>
       ${sw(AIS.greetOnJoin,"aiSet('greet_on_join',!AIS.greetOnJoin)")}</div>
+    <div class="togcard"><div><div class="lab">Looks things up</div><div class="sub">players, log, sums, saved places</div></div>
+      ${sw(AIS.useTools,"aiSet('use_tools',!AIS.useTools)")}</div>
+    <div class="togcard"><div><div class="lab">Chat commands</div><div class="sub">“${nm.toLowerCase()} help” works without the model</div></div>
+      ${sw(AIS.chatCommandsOn,"aiSet('chat_commands',!AIS.chatCommandsOn)")}</div>
+    <div class="togcard"><div><div class="lab">Fixes its own commands</div><div class="sub">gets one go at a rejected command</div></div>
+      ${sw(AIS.retryBadCommands,"aiSet('retry_bad_commands',!AIS.retryBadCommands)")}</div>
+    <div class="togcard"><div><div class="lab">Says when it's down</div><div class="sub">one line in chat if the brain stops</div></div>
+      ${sw(AIS.notifyWhenDown,"aiSet('notify_when_down',!AIS.notifyWhenDown)")}</div>
   </div>
 
   ${aiBrainCard()}
@@ -1567,6 +1575,8 @@ function renderAI(){
     </div>
     <div id="tbList"></div>
   </div>
+
+  ${aiToolsCard()}
 
   <div class="card paper">
     <div class="lab" style="font-weight:600">Trusted players</div>
@@ -1657,6 +1667,7 @@ function aiMemoryCard(){
       <button class="primary" style="font-size:13px;padding:9px 18px" onclick="aiSaveMemory()">Save memory</button>
       <span class="meta">it also keeps its own notes on players</span>
     </div>
+    ${aiPlacesFacts(m)}
     ${Object.keys(players).length?`<div style="margin-top:14px">
       ${Object.keys(players).map(p=>`<div class="listrow" style="align-items:flex-start">
         <div style="min-width:0"><div style="font-weight:500">${esc(p)}</div>
@@ -1664,6 +1675,53 @@ function aiMemoryCard(){
         <button class="btn sm" style="color:var(--danger)" onclick="aiForget('${js(p)}')">forget</button></div>`).join('')}
     </div>`:'<div class="meta" style="margin-top:12px">no notes on anyone yet</div>'}
   </div>`;}
+
+/* lookups and panel actions, and the chat commands that skip the model */
+function aiToolsCard(){
+  const tools=AIS.aiTools||[], cmds=AIS.chatCommands||[], nm=esc(AIS.name);
+  const kc={lookup:'var(--muted)',action:'var(--ember)'};
+  return `<div class="card paper">
+    <div class="lab" style="font-weight:600">Tools</div>
+    <div class="sub" style="color:var(--muted);font-size:12px;margin-bottom:12px">
+      Things ${nm} can do that aren't console commands. A <b>lookup</b> it makes before answering — so it reads the log instead of guessing.
+      An <b>action</b> changes something in the panel. “trusted” tools are refused for everyone else, whatever the model says.
+      · <b>${tools.filter(t=>t.on).length}</b> of ${tools.length} switched on</div>
+    ${tools.map(t=>`<div class="listrow" style="align-items:flex-start">
+      <div style="min-width:0">
+        <div style="font-weight:500;font-family:var(--mono)">${esc(t.name)}
+          <span style="font-size:11px;color:${kc[t.kind]};font-family:inherit">· ${esc(t.kind)}</span>
+          <span style="font-size:11px;color:${t.who==='trusted'?'var(--ember)':'var(--muted)'};font-family:inherit">· ${t.who==='trusted'?'trusted only':'anyone'}</span></div>
+        <div class="meta" style="white-space:normal">${esc(t.what)}</div>
+      </div>
+      <div class="sw ${t.on?'on':''}" onclick="aiToolToggle('${js(t.name)}')"><b></b></div>
+    </div>`).join('')}
+    <div class="lab" style="font-weight:600;margin-top:18px">Chat commands</div>
+    <div class="sub" style="color:var(--muted);font-size:12px;margin-bottom:10px">
+      Players type these in game. ${nm} answers instantly from the panel — no model call, so they still work when the brain is down.
+      Start with its name (“${nm.toLowerCase()} help”), or <span style="font-family:var(--mono)">!help</span> once a conversation is open.</div>
+    <div class="row" style="flex-wrap:wrap;gap:6px">
+      ${cmds.map(c=>`<span title="${attr(c.what)}" style="padding:5px 10px;border:1px solid var(--border);border-radius:20px;font-size:12px;font-family:var(--mono)">${esc(c.say)}
+        <span style="font-family:inherit;color:var(--muted)">— ${esc(c.what)}</span></span>`).join('')}</div>
+  </div>`;}
+function aiToolToggle(name){
+  const off=(AIS.disabledAiTools||[]).slice();
+  const i=off.indexOf(name);
+  if(i>=0)off.splice(i,1);else off.push(name);
+  aiSet('disabled_ai_tools',off);
+}
+function aiPlacesFacts(m){
+  const places=m.places||{}, facts=m.facts||[];
+  const pk=Object.keys(places);
+  if(!pk.length&&!facts.length)return '<div class="meta" style="margin-top:12px">no saved places or server notes yet — ask it to “remember our base is at …”</div>';
+  return `<div style="margin-top:14px">
+    ${pk.map(k=>{const p=places[k];return `<div class="listrow"><div style="min-width:0"><div style="font-weight:500">📍 ${esc(k)}</div>
+      <div class="meta">${esc(p.x)} ${esc(p.y)} ${esc(p.z)}${p.dim&&p.dim!=='overworld'?' · '+esc(p.dim):''}${p.by?' · saved by '+esc(p.by):''}</div></div>
+      <button class="btn sm" style="color:var(--danger)" onclick="aiForgetPlace('${js(k)}')">forget</button></div>`;}).join('')}
+    ${facts.map(f=>`<div class="listrow"><div class="meta" style="white-space:normal;min-width:0">📝 ${esc(f)}</div>
+      <button class="btn sm" style="color:var(--danger)" onclick="aiForgetFact('${js(f)}')">forget</button></div>`).join('')}
+  </div>`;}
+async function aiForgetPlace(k){const r=await api('/api/ai/memory','POST',{forgetPlace:k});toast(r.msg);loadAI();}
+async function aiForgetFact(f){const r=await api('/api/ai/memory','POST',{forgetFact:f});toast(r.msg);loadAI();}
 
 /* the toolbelt list — grouped by category, each row a switch */
 function renderTools(){

@@ -21,7 +21,7 @@ import urllib.request, urllib.error, zipfile, io
 BASE = os.path.dirname(os.path.abspath(__file__))
 NO_WINDOW = 0x08000000 if os.name == 'nt' else 0
 
-APP_VERSION = "1.6.0"      # only a fallback; the VERSION file is the truth
+APP_VERSION = "1.7.0"      # only a fallback; the VERSION file is the truth
 
 REPO = "SIllowet/hearth-panel"
 BRANCH = "main"
@@ -42,7 +42,7 @@ STAGE_MARK = os.path.join(STAGE_DIR, 'ready.json')
 # Anything not on this list - your worlds, backups, config.json, API keys,
 # server jars - is never read, moved or deleted by the updater.
 APP_FILES = [
-    'app.py', 'ai.py', 'mc_tools.py', 'modstore.py', 'hearth_setup.py',
+    'app.py', 'ai.py', 'ai_tools.py', 'mc_tools.py', 'modstore.py', 'hearth_setup.py',
     'start-panel.bat', 'README.md', 'config.example.json', 'VERSION',
     'CHANGELOG.md', 'LICENSE',
 ]

@@ -12,6 +12,7 @@
 #   check()         -> the gate the answer has to pass on the way out
 #
 # stdlib only, on purpose. Both panels import this and nothing else.
+import re
 
 # risk levels:
 #   safe     - hand it to anyone trusted, worst case is a silly effect
@@ -292,6 +293,22 @@ TOOLS = [
      "syntax": "help [command]",
      "example": "help effect"},
 
+    # ------------------------------------------------------------ paper / spigot
+    # Not vanilla: a plain Mojang server answers "Unknown command" to these, which
+    # she reads as "not on this server" and moves on. Paper and its forks have them.
+    {"cmd": "tps", "cat": "Server (Paper)", "risk": "safe",
+     "what": "Ticks per second - the quickest way to answer 'is the server lagging?'. Paper and forks only.",
+     "syntax": "tps", "example": "tps"},
+    {"cmd": "mspt", "cat": "Server (Paper)", "risk": "safe",
+     "what": "How long a tick takes, in milliseconds. Paper and forks only.",
+     "syntax": "mspt", "example": "mspt"},
+    {"cmd": "version", "cat": "Server (Paper)", "risk": "safe",
+     "what": "Which server software and Minecraft version this is. Paper and Spigot only.",
+     "syntax": "version", "example": "version"},
+    {"cmd": "plugins", "cat": "Server (Paper)", "risk": "safe",
+     "what": "List installed plugins. Paper and Spigot only.",
+     "syntax": "plugins", "example": "plugins"},
+
     # -------------------------------------------------------------- off-limits
     # She is shown these so she can name them and refuse cleanly, rather than
     # trying one and getting stopped by the gate.
@@ -338,9 +355,13 @@ ALIASES = {
     "pardon-ip": "pardon",
     "restart": "stop",
     "perf": "debug",
+    "tm": "teammsg",
+    "ver": "version",
+    "pl": "plugins",
+    "gm": "gamemode",
 }
 
-CATEGORY_ORDER = ["Players", "World", "Blocks", "Entities", "Talking", "Bookkeeping", "Off-limits"]
+CATEGORY_ORDER = ["Players", "World", "Blocks", "Entities", "Talking", "Bookkeeping", "Server (Paper)", "Off-limits"]
 
 BY_NAME = {t["cmd"]: t for t in TOOLS}
 
@@ -436,3 +457,26 @@ def check(cmd, disabled=None):
     if len(cmd.split()) == 1 and tool["syntax"].startswith(name + " <"):
         return False, name, "'%s' needs arguments - syntax is: %s" % (name, tool["syntax"])
     return True, name, ""
+
+
+# Commands whose arguments are free text, where a "~" or "@s" is just words.
+_TEXT_COMMANDS = {"say", "tellraw", "msg", "title", "me", "teammsg", "bossbar"}
+_CONSOLE_BAD = re.compile(r'(?:^|\s)(?:@s\b|@p\b|[~^])')
+
+
+def console_problem(cmd):
+    """Selectors and coordinates that only mean something to a player.
+
+    Commands arrive as the console, which has no body and no position: @s is
+    nobody, @p is whoever is nearest to nowhere, and ~ ~ ~ is the world spawn.
+    The model is told this in the prompt and still reaches for them, so say it
+    again where it can act on it. /execute is exempt - 'execute as X at @s run
+    ...' is exactly how you give a command a position."""
+    cmd = (cmd or "").strip().lstrip("/").strip()
+    head = cmd.split()[0].lower() if cmd else ""
+    if not head or head == "execute" or resolve(head) in _TEXT_COMMANDS:
+        return ""
+    if _CONSOLE_BAD.search(cmd):
+        return ("I run as the console, which has no position - @s, @p and ~ ^ don't work. "
+                "Use the player's name and absolute coordinates, or wrap it in execute as <player> at @s run ...")
+    return ""

@@ -252,7 +252,7 @@ local model works fine for chat and simple commands.
 
 The AI cannot type whatever it likes into your console.
 
-Every command it's allowed to touch lives in `mc_tools.py` as a catalog — 65 of
+Every command it's allowed to touch lives in `mc_tools.py` as a catalog — 80 of
 them, each with its real syntax, an example and a risk level. That catalog
 is handed to the model on every reply, so it picks a tool off a list instead of
 writing commands from memory. On the way back, anything that isn't on the list is
@@ -273,10 +273,59 @@ stop  op  deop  ban  ban-ip  pardon  whitelist  save-off  reload  debug  jfr
 Those either kill the server, hand out permanent power, or switch off the
 saving that protects your world. They aren't a setting you can toggle.
 
+Four more (`tps`, `mspt`, `version`, `plugins`) only exist on Paper and its forks;
+on a plain Mojang server they answer "Unknown command" and it moves on.
+
 That's the whole vanilla command set bar three — `return`, `publish` and `test`
 only work inside a datapack function, a singleplayer world, or the gametest
 harness, so a chat message can't reach them. Add them to `mc_tools.py` if you
 disagree; the panel reads whatever is in that list.
+
+### Tools
+
+Commands change the world. **Tools** are everything else it can reach for, and
+they live in `ai_tools.py`. Most are *lookups*: it asks, Hearth answers, and it
+replies with the facts in front of it instead of guessing.
+
+| Tool | Who | What it does |
+|---|---|---|
+| `players_online` | anyone | who's on right now |
+| `server_info` | anyone | MOTD, difficulty, game mode, player cap, PvP (never passwords or addresses) |
+| `calc` | anyone | exact arithmetic - "how many stacks is 1000?" |
+| `list_places` | anyone | named spots this server has saved |
+| `remind` | anyone | say something to the room in 1-180 minutes (five pending per player) |
+| `read_log` | trusted | search the end of `latest.log`, with IP addresses hidden |
+| `ask_server` | trusted | read-only console questions over RCON: `list`, `seed`, `time query`, `data get`, `gamerule <rule>`, `worldborder get`, `tick query`... Anything that changes something is refused |
+| `list_backups` | trusted | newest backups and when |
+| `save_place` / `forget_place` | trusted | keep a named set of coordinates; teleports use them instead of guessing |
+| `add_fact` | trusted | remember something about the server for next week |
+| `backup_now` | trusted | take a backup (once every five minutes) |
+
+"Trusted" is checked in the panel against your real list, the same as commands -
+the model can't talk its way past it. Every tool has a switch on the AI tab, and
+one master switch (*Looks things up*) turns them all off.
+
+A lookup costs an extra model call: it asks, gets the answer, then replies. That
+is capped at two extra calls per reply (`max_tool_rounds` in `ai_config.json`).
+The same budget lets it fix a command it got wrong - an invented command, a
+missing argument, or `@s` / `~ ~ ~`, which mean nothing to a console - once,
+before anything is sent.
+
+### Chat commands
+
+A few things don't need a model at all. Say its name and one of these and the
+panel answers directly - instantly, free, and even when the brain is down:
+
+```
+ember help      the list          ember whoami   would it run commands for you
+ember tools     what it can do    ember notes    what it remembers about you
+ember status    is it working     ember forget me   wipe those notes
+ember places    saved spots       ember bye      sign off until called again
+```
+
+Once a conversation is open you can leave the name off and write `!help`. A plain
+"help me find diamonds" is still just talk. Turn them off with *Chat commands* on
+the AI tab.
 
 ### Who it listens to
 
@@ -301,6 +350,10 @@ anywhere except to the provider you chose, as part of the reply it's working on.
 
 ### Notes
 
+- If the provider stops answering, it says so in chat once every two minutes
+  rather than going silent. Switch that off with *Says when it's down*.
+- `ask_server` needs RCON, which Hearth switches on for the worlds it makes. A
+  world with RCON turned off can still chat and use every other tool.
 - It only works on worlds **started from this panel** — it needs the console pipe.
   A world left running from a previous session has no AI attached until you
   restart it here.
@@ -563,7 +616,9 @@ in game — is never mistaken for a crash.
   running commands on your server, so keep the trusted list to people you'd hand
   the console to anyway, and back your world up (the panel already does).
 - Your AI provider sees the chat it's replying to, the recent console lines and
-  your memory file. If that matters to you, run Ollama and nothing leaves the PC.
+  your memory file - and whatever a lookup returns (log lines with addresses
+  scrubbed, a server query's answer, your saved places). If that matters to you,
+  run Ollama and nothing leaves the PC.
 - New worlds are created with `online-mode=true`, which means Minecraft verifies that
   players own the game. If you set it to `false`, anyone who knows your address can
   join under any name — and be aware that **flipping this setting on an existing world
@@ -633,6 +688,8 @@ ai.py             the console companion: chat, providers, trust, memory.
                   Optional — delete it and the panel runs exactly as before.
 mc_tools.py       the toolbelt: every Minecraft command the AI may use, with
                   syntax and risk level. Edit this to widen or narrow its reach.
+ai_tools.py       its lookups and panel actions (log, places, reminders, read-only
+                  server queries) and the chat commands that skip the model.
 hearth_setup.py   first-run checks, the network probe, and the self-updater.
 config.json       your servers and secrets. Created on first run. Never committed.
 ai_config.json    the AI's name, personality, provider and API key. Never committed.
